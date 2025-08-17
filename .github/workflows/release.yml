@@ -74,16 +74,16 @@ jobs:
           mkdir -p release
           # Add a quick-start README inside the bundle
           cat > dist/${NAME}/README-RUN.txt << 'EOF'
-Delta Vision — standalone bundle
+            Delta Vision — standalone bundle
 
-Usage:
-  Linux/macOS: ./deltavision --new /path/to/New --old /path/to/Old --keywords /path/to/keywords.md
-  Windows:     deltavision.exe --new C:\\path\\to\\New --old C:\\path\\to\\Old --keywords C:\\path\\to\\keywords.md
+            Usage:
+              Linux/macOS: ./deltavision --new /path/to/New --old /path/to/Old --keywords /path/to/keywords.md
+              Windows:     deltavision.exe --new C:\\path\\to\\New --old C:\\path\\to\\Old --keywords C:\\path\\to\\keywords.md
 
-Notes:
-  - No additional dependencies required.
-  - For server mode: `./deltavision --server --port 8765 ...`
-  - For client mode: `./deltavision --client --host 1.2.3.4 --port 8765`
+            Notes:
+              - No additional dependencies required.
+              - For server mode: `./deltavision --server --port 8765 ...`
+              - For client mode: `./deltavision --client --host 1.2.3.4 --port 8765`
 EOF
 
           if [[ "${OSNAME}" == "Windows" ]]; then
@@ -98,7 +98,9 @@ EOF
         uses: actions/upload-artifact@v4
         with:
           name: binaries-${{ runner.os }}
-          path: release/*.zip
+          path: |
+            release/*.zip
+            release/*.tar.gz
 
   publish_release:
     name: Publish GitHub Release
