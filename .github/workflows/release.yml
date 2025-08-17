@@ -72,17 +72,23 @@ jobs:
           TAG="${GITHUB_REF_NAME}"
           OSNAME="${{ runner.os }}"
           mkdir -p release
-          # Add a quick-start README inside the bundle
-          {
-            printf '%s\n' 'Delta Vision — standalone bundle'
-            printf '%s\n' '' 'Usage:'
-            printf '%s\n' '  Linux/macOS: ./deltavision --new /path/to/New --old /path/to/Old --keywords /path/to/keywords.md'
-            printf '%s\n' '  Windows:     deltavision.exe --new C:\\path\\to\\New --old C:\\path\\to\\Old --keywords C:\\path\\to\\keywords.md'
-            printf '%s\n' '' 'Notes:'
-            printf '%s\n' '  - No additional dependencies required.'
-            printf '%s\n' '  - For server mode: ./deltavision --server --port 8765 ...'
-            printf '%s\n' '  - For client mode: ./deltavision --client --host 1.2.3.4 --port 8765'
-          } > "dist/${NAME}/README-RUN.txt"
+            # Add a quick-start README inside the bundle (ASCII only, short lines)
+            {
+              echo 'Delta Vision - standalone bundle'
+              echo
+              echo 'Usage:'
+              echo '  Linux/macOS:'
+              echo '    ./deltavision --new /path/to/New --old /path/to/Old \'
+              echo '      --keywords /path/to/keywords.md'
+              echo '  Windows:'
+              echo '    deltavision.exe --new C:\\path\\to\\New --old C:\\path\\to\\Old ^'
+              echo '      --keywords C:\\path\\to\\keywords.md'
+              echo
+              echo 'Notes:'
+              echo '  - No additional dependencies required.'
+              echo '  - Server: ./deltavision --server --port 8765 ...'
+              echo '  - Client: ./deltavision --client --host 1.2.3.4 --port 8765'
+            } > "dist/${NAME}/README-RUN.txt"
 
           if [[ "${OSNAME}" == "Windows" ]]; then
             ARCHIVE_PATH="release/${NAME}-${TAG}-${OSNAME}.zip"
