@@ -1,9 +1,12 @@
-def main():
-    import argparse
-    import os
-    import tempfile
+import argparse
+import asyncio
+import os
+import tempfile
 
-    from textual.app import App
+from textual.app import App
+
+
+def main():
 
     from delta_vision.screens.main_screen import MainScreen
     from delta_vision.themes import register_all_themes
@@ -15,7 +18,48 @@ def main():
     parser.add_argument(
         '--notes', type=str, help='Path to notes directory or file (defaults to OS temp dir when omitted)'
     )
-    args = parser.parse_args()
+    parser.add_argument('--server', action='store_true', help='Start as a TCP/WebSocket server')
+    parser.add_argument('--client', action='store_true', help='Connect as a network client')
+    parser.add_argument('--port', type=int, default=8765, help='Port for server or client connection')
+    parser.add_argument('--host', type=str, default='localhost', help='Host for client connection')
+
+    args, unknown = parser.parse_known_args()
+
+    # Fallback to environment variables if arguments are missing (for web/server mode)
+    if not args.new:
+        args.new = os.environ.get('DELTA_NEW')
+    if not args.old:
+        args.old = os.environ.get('DELTA_OLD')
+    if not args.keywords:
+        args.keywords = os.environ.get('DELTA_KEYWORDS')
+    if not args.notes:
+        args.notes = os.environ.get('DELTA_NOTES')
+
+    # Network/server env overrides
+    # Only apply when user didn't explicitly choose a mode
+    if not args.server and not args.client:
+        mode = (os.environ.get('DELTA_MODE') or '').lower().strip()
+        if mode == 'server':
+            args.server = True
+        elif mode == 'client':
+            args.client = True
+        else:
+            # Back-compat toggles
+            if os.environ.get('DELTA_SERVER') in {'1', 'true', 'yes', 'on'}:
+                args.server = True
+            if os.environ.get('DELTA_CLIENT') in {'1', 'true', 'yes', 'on'}:
+                args.client = True
+
+    # Host/Port env overrides: apply if env is set
+    env_port = os.environ.get('DELTA_PORT')
+    if env_port:
+        try:
+            args.port = int(env_port)
+        except ValueError:
+            pass
+    env_host = os.environ.get('DELTA_HOST')
+    if env_host:
+        args.host = env_host
 
     class HomeApp(App):
         BINDINGS = [
@@ -168,9 +212,33 @@ def main():
             finally:
                 self._notes_reparenting = False
 
-    HomeApp(
-        folder_path=args.new,
-        old_folder_path=args.old,
-        keywords_path=args.keywords,
-        notes_dir_path=args.notes,
-    ).run()
+
+    # Determine mode based on flags
+    if args.server:
+        # Pass only defined values into env so child sessions inherit file paths
+        child_env = {k: v for k, v in {
+            'DELTA_NEW': args.new,
+            'DELTA_OLD': args.old,
+            'DELTA_KEYWORDS': args.keywords,
+            'DELTA_NOTES': args.notes,
+        }.items() if v}
+        print(f"Starting server on port {args.port}...")
+        # Import here to avoid loading network code for local runs
+        from delta_vision.net.server import start_server  # noqa: E402
+        asyncio.run(start_server(port=args.port, child_env=child_env))
+    elif args.client:
+        print(f"Connecting to server at {args.host}:{args.port}...")
+        from delta_vision.net.client import start_client  # noqa: E402
+        asyncio.run(start_client(host=args.host, port=args.port))
+    else:
+        # Default to local TUI mode
+        HomeApp(
+            folder_path=args.new,
+            old_folder_path=args.old,
+            keywords_path=args.keywords,
+            notes_dir_path=args.notes,
+        ).run()
+
+# Ensure main() runs both as a script and when run by textual serve
+if __name__ == "__main__" or __name__.endswith(".app"):
+    main()

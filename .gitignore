@@ -31,11 +31,12 @@ share/python-wheels/
 *.egg
 MANIFEST
 
-# PyInstaller
-#  Usually these files are written by a python script from a template
-#  before PyInstaller builds the exe, so as to inject date/other infos into it.
+# PyInstaller outputs
 *.manifest
 *.spec
+/dist/
+/build/
+/__pycache__/
 
 # Installer logs
 pip-log.txt
@@ -113,6 +114,7 @@ venv/
 ENV/
 env.bak/
 venv.bak/
+/.venv/
 
 # Spyder project settings
 .spyderproject
@@ -271,6 +273,7 @@ logs/
 *.log
 run/
 *.pid
+*.bak
 
 # Documentation builds
 docs/build/

@@ -25,14 +25,22 @@ classifiers = [
 ]
 dependencies = [
   "textual >=5.3,<6",
-  "watchdog>=3"
+  "watchdog>=3",
+  # Network transport for server/client mode (installed by default so users don't need extras)
+  "websockets>=12"
 ]
+
+# No optional extras required for core features; networking is included by default
 
 [tool.hatch.version]
 path = "src/delta_vision/__about__.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/delta_vision"]
+include = [
+  # Include Textual CSS assets so they are available at runtime after install
+  "src/delta_vision/**/*.tcss",
+]
 
 [project.scripts]
 deltavision = "delta_vision.entry_points:main"
