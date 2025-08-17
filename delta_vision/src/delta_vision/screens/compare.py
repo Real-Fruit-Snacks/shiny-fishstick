@@ -1,0 +1,547 @@
+"""Compare screen: correlate files by the quoted command on the first line.
+
+This screen scans the NEW and OLD folders and groups files by their embedded
+command (read from the first line in quotes). It shows:
+- DIFF: newest NEW vs newest matching OLD
+- SAME: newest NEW vs the previous NEW with the same command (to detect churn)
+
+Press Enter to open a side-by-side diff for the selected row.
+"""
+
+from __future__ import annotations
+
+import os
+import re
+from dataclasses import dataclass
+
+from rich.text import Text
+from textual.app import ComposeResult
+from textual.containers import Vertical
+from textual.screen import Screen
+from textual.widgets import DataTable
+
+from delta_vision.utils.io import read_lines
+from delta_vision.utils.watchdog import start_observer
+from delta_vision.widgets.footer import Footer
+from delta_vision.widgets.header import Header
+
+
+@dataclass
+class Pair:
+    """A comparison pair between two files for the same command.
+
+    kind:
+        - "DIFF": newest NEW vs newest OLD
+        - "SAME": newest NEW vs previous NEW
+    """
+
+    command: str
+    new_path: str
+    old_path: str
+    kind: str  # "DIFF" or "SAME"
+
+
+class CompareScreen(Screen):
+    """Table of comparison pairs with quick filtering and navigation."""
+
+    BINDINGS = [
+        ("q", "go_back", "Back"),
+        ("f", "toggle_changes_only", "Changes Only"),
+        ("j", "next_row", "Down"),
+        ("k", "prev_row", "Up"),
+        ("G", "end", "End"),
+    ]
+
+    CSS_PATH = "search.tcss"  # reuse basic table styling
+
+    def __init__(
+        self,
+        new_folder_path: str | None = None,
+        old_folder_path: str | None = None,
+        keywords_path: str | None = None,
+    ):
+        super().__init__()
+        self.new_folder_path = new_folder_path
+        self.old_folder_path = old_folder_path
+        self.keywords_path = keywords_path
+        self._table = None
+        self._pairs = []  # full computed pairs
+        self._display_pairs = []  # pairs actually displayed in the table order
+        self._footer = None
+        # Filter toggle (only show rows with changes)
+        self._changes_only = False
+        # Track gg behavior
+        self._last_g = False
+        # Watchdog observers
+        self._observer_new = None
+        self._observer_old = None
+
+    def compose(self) -> ComposeResult:
+        """Build header, results table, and footer (with a dynamic hint)."""
+        yield Header(page_name="Compare", show_clock=True)
+        with Vertical(id="compare-root"):
+            self._table = DataTable(id="compare-table")
+            # TYPE first, then Command
+            self._table.add_column(Text("TYPE", justify="center"), key="type", width=6)
+            # Thin visual separators between columns
+            self._table.add_column(Text("│", style="dim", justify="center"), key="sep1", width=1)
+            self._table.add_column(Text("Change", justify="center"), key="chg", width=8)
+            self._table.add_column(Text("│", style="dim", justify="center"), key="sep2", width=1)
+            self._table.add_column("Command", key="cmd")
+            yield self._table
+        self._footer = Footer(text=self._footer_text(), classes="footer-search")
+        yield self._footer
+
+    def _footer_text(self) -> str:
+        """Return footer text that reflects the current filter state."""
+        state = "ON" if self._changes_only else "OFF"
+        return (
+            " [orange1]q[/orange1] Back    "
+            "[orange1]Enter[/orange1] View Diff    "
+            f"[orange1]f[/orange1] Changes Only: {state}    "
+            "Legend: [green]✓[/green] changed, [orange1]✗[/orange1] same"
+        )
+
+    def on_mount(self):
+        """Initialize table polish and start folder watchers, then scan."""
+        self.title = "Delta Vision — Compare"
+        try:
+            if self._table and hasattr(self._table, "zebra_stripes"):
+                self._table.zebra_stripes = True
+            # Row-only selection so the separator column isn't selectable
+            if self._table and hasattr(self._table, "cursor_type"):
+                self._table.cursor_type = "row"
+        except Exception:
+            pass
+        self._scan_and_populate()
+
+        # Start watchers for live updates
+        def trigger_refresh():
+            if self.app:
+                self.app.call_later(self._scan_and_populate)
+
+        try:
+            if self.new_folder_path and os.path.isdir(self.new_folder_path):
+                self._observer_new, self._stop_new = start_observer(self.new_folder_path, trigger_refresh)
+        except Exception:
+            self._observer_new = None
+            self._stop_new = None
+        try:
+            if self.old_folder_path and os.path.isdir(self.old_folder_path):
+                self._observer_old, self._stop_old = start_observer(self.old_folder_path, trigger_refresh)
+        except Exception:
+            self._observer_old = None
+            self._stop_old = None
+
+    def on_unmount(self):
+        """Stop any active observers when leaving the screen."""
+        # Stop observers when leaving the screen
+        # Prefer unified stop functions
+        try:
+            stop_new = getattr(self, "_stop_new", None)
+            if callable(stop_new):
+                stop_new()
+        except Exception:
+            pass
+        try:
+            stop_old = getattr(self, "_stop_old", None)
+            if callable(stop_old):
+                stop_old()
+        except Exception:
+            pass
+        # Fallback: legacy observer stop if present
+        for obs in (getattr(self, "_observer_new", None), getattr(self, "_observer_old", None)):
+            try:
+                if obs:
+                    obs.stop()
+                    obs.join(timeout=0.5)
+            except Exception:
+                pass
+        self._observer_new = None
+        self._observer_old = None
+        self._stop_new = None
+        self._stop_old = None
+
+    def action_go_back(self):
+        """Return to the previous screen."""
+        try:
+            self.app.pop_screen()
+        except Exception:
+            pass
+
+    def _scan_and_populate(self):
+        """Recompute comparison pairs and rebuild the table.
+
+        Preserves the current selection where possible by mapping back from the
+        selected row to its underlying pair identity.
+        """
+        pairs = self._find_pairs()
+        self._pairs = pairs
+        table = self._table
+        if not table:
+            return
+        # Capture current selection key to restore after rebuild
+        prev_key = None
+        try:
+            coord = table.cursor_coordinate
+            if coord is not None:
+                row_index = getattr(coord, 'row', None)
+                if row_index is not None and 0 <= row_index < len(getattr(self, '_display_pairs', [])):
+                    cur_pair = self._display_pairs[row_index]
+                    if cur_pair:
+                        prev_key = (cur_pair.new_path, cur_pair.old_path, cur_pair.kind)
+        except Exception:
+            prev_key = None
+        try:
+            table.clear()
+        except Exception:
+            pass
+
+        def type_style(kind: str) -> str:
+            kind_upper = (kind or "").upper()
+            if kind_upper == "DIFF":
+                return "bold yellow"
+            if kind_upper == "SAME":
+                return "bold green"
+            return "bold white"
+
+        display_pairs = []
+        for p in pairs:
+            cmd_text = Text(p.command, style="bold")
+            type_text = Text(p.kind, style=type_style(p.kind), justify="center")
+            # Compute change by comparing file contents (excluding header line)
+            try:
+                changed = self._pair_changed(p)
+            except Exception:
+                changed = False
+            # Filter when 'changes only' is enabled
+            if self._changes_only and not changed:
+                continue
+            # Use symbols: ✓ for changed, ✗ for no change
+            chg_text = Text(
+                "✓" if changed else "✗", style=("bold green" if changed else "bold orange1"), justify="center"
+            )
+            sep1 = Text("│", style="dim")
+            sep2 = Text("│", style="dim")
+            # TYPE | sep1 | Change | sep2 | Command
+            row_key = (p.new_path, p.old_path, p.kind)
+            try:
+                table.add_row(type_text, sep1, chg_text, sep2, cmd_text, key=row_key)  # type: ignore[call-arg]
+            except Exception:
+                table.add_row(type_text, sep1, chg_text, sep2, cmd_text)
+            display_pairs.append(p)
+        # Save display mapping used by selection and open
+        self._display_pairs = display_pairs
+        if display_pairs:
+            try:
+                # Restore selection by key when possible
+                target_row = 0
+                if prev_key is not None:
+                    try:
+                        get_row_index = getattr(table, 'get_row_index', None)
+                        if callable(get_row_index):
+                            idx = get_row_index(prev_key)
+                            if isinstance(idx, int) and 0 <= idx < len(display_pairs):
+                                target_row = idx
+                        else:
+                            for idx, dp in enumerate(display_pairs):
+                                if (dp.new_path, dp.old_path, dp.kind) == prev_key:
+                                    target_row = idx
+                                    break
+                    except Exception:
+                        pass
+                table.move_cursor(row=target_row, column=0)
+                self.set_focus(table)
+            except Exception:
+                pass
+
+    # Note: filenames are intentionally not shown in the table per request.
+
+    def _pair_changed(self, p: Pair) -> bool:
+        """Return True if the compared files differ in content (excluding header)."""
+        a, b = None, None
+        if p.kind == "DIFF":
+            a, b = p.old_path, p.new_path
+        else:  # SAME compares two most-recent NEW files already stored in pair
+            a, b = p.old_path, p.new_path
+        if not a or not b or not os.path.isfile(a) or not os.path.isfile(b):
+            return False
+        try:
+            # Fast-path: if sizes and mtimes are identical, assume unchanged
+            sa, sb = os.stat(a), os.stat(b)
+            if sa.st_size == sb.st_size and int(sa.st_mtime) == int(sb.st_mtime):
+                return False
+            la = self._read_content_lines(a)
+            lb = self._read_content_lines(b)
+            return la != lb
+        except Exception:
+            return False
+
+    def _read_content_lines(self, file_path: str) -> list[str]:
+        """Read file as list of lines, skipping the first line (header)."""
+        lines, _enc = read_lines(file_path)
+        return lines[1:] if lines else []
+
+    def _find_pairs(self) -> list[Pair]:
+        """Compute DIFF and SAME pairs for all discovered commands."""
+        # Build maps of command -> list of file paths for NEW and OLD
+        new_map = self._scan_folder(self.new_folder_path)
+        old_map = self._scan_folder(self.old_folder_path)
+
+        items: list[Pair] = []
+
+        # DIFF rows: exists in both NEW and OLD; pick latest of each
+        for cmd in sorted(set(new_map.keys()) & set(old_map.keys()), key=str.lower):
+            new_path = max(new_map[cmd], key=self._safe_mtime)
+            old_path = max(old_map[cmd], key=self._safe_mtime)
+            items.append(Pair(cmd, new_path, old_path, kind="DIFF"))
+
+        # SAME rows: command appears multiple times in NEW; compare most recent vs second most recent
+        for cmd, files in new_map.items():
+            if len(files) >= 2:
+                latest_two = sorted(files, key=self._safe_mtime, reverse=True)[:2]
+                items.append(Pair(cmd, latest_two[0], latest_two[1], kind="SAME"))
+
+        # Sort by command, then by kind (DIFF before SAME), then by newest filename
+        def sort_key(p: Pair):
+            kind_order = 0 if p.kind == "DIFF" else 1
+            return (p.command.lower(), kind_order, os.path.basename(p.new_path).lower())
+
+        items.sort(key=sort_key)
+        return items
+
+    def _safe_mtime(self, path: str) -> float:
+        try:
+            return os.path.getmtime(path)
+        except Exception:
+            return 0.0
+
+    def _scan_folder(self, base: str | None) -> dict[str, list[str]]:
+        """Return mapping of command -> file paths found under base (recursive)."""
+        result: dict[str, list[str]] = {}
+        if not base or not os.path.isdir(base):
+            return result
+        for root, _dirs, files in os.walk(base):
+            for name in files:
+                fp = os.path.join(root, name)
+                if not os.path.isfile(fp):
+                    continue
+                # Extract command between quotes on first line
+                cmd = self._first_line_command(fp)
+                if not cmd:
+                    continue
+                result.setdefault(cmd, []).append(fp)
+        return result
+
+    def _first_line_command(self, file_path: str) -> str | None:
+        """Extract the quoted command from the header line, if present."""
+        # Centralized multi-encoding read
+        lines, _enc = read_lines(file_path)
+        if not lines:
+            return None
+        return self._extract_command(lines[0])
+
+    def _extract_command(self, line: str) -> str | None:
+        """Return text between quotes in a header line."""
+        if not line:
+            return None
+        m = re.search(r'"([^"]+)"', line)
+        return m.group(1) if m else None
+
+    def action_toggle_changes_only(self):
+        """Toggle showing only comparisons with changes."""
+        try:
+            self._changes_only = not self._changes_only
+            if self._footer:
+                self._footer.update(Text.from_markup(self._footer_text()))
+            self._scan_and_populate()
+        except Exception:
+            pass
+
+    def on_key(self, event):
+        table = self._table
+        key = getattr(event, 'key', None)
+        if not table or key is None:
+            return
+
+        if key == 'enter':
+            try:
+                if self.screen.focused == table:
+                    event.stop()
+                    self._open_selected_pair()
+                    return
+            except Exception:
+                pass
+            return
+
+        if key in ('j', 'k', 'g', 'G'):
+            try:
+                self.set_focus(table)
+            except Exception:
+                pass
+            try:
+                event.stop()
+            except Exception:
+                pass
+
+            def get_pos():
+                cur = 0
+                try:
+                    coord = table.cursor_coordinate
+                    if coord is not None:
+                        cur = getattr(coord, 'row', 0)
+                except Exception:
+                    pass
+                try:
+                    total = getattr(table, 'row_count', None)
+                    if total is None:
+                        total = len(getattr(table, 'rows', []))
+                except Exception:
+                    total = 0
+                return cur, total
+
+            def set_row(r):
+                try:
+                    table.move_cursor(row=r, column=0)
+                    scroll_to_row = getattr(table, 'scroll_to_row', None)
+                    if callable(scroll_to_row):
+                        scroll_to_row(r)
+                    else:
+                        scroll_to_cursor = getattr(table, 'scroll_to_cursor', None)
+                        if callable(scroll_to_cursor):
+                            scroll_to_cursor()
+                except Exception:
+                    pass
+
+            if key == 'j':
+                cur, total = get_pos()
+                if total:
+                    set_row(min(cur + 1, total - 1))
+                self._last_g = False
+            elif key == 'k':
+                cur, total = get_pos()
+                if total:
+                    set_row(max(cur - 1, 0))
+                self._last_g = False
+            elif key == 'G':
+                _cur, total = get_pos()
+                if total:
+                    set_row(total - 1)
+                self._last_g = False
+            elif key == 'g':
+                if self._last_g:
+                    set_row(0)
+                    self._last_g = False
+                else:
+                    self._last_g = True
+            else:
+                self._last_g = False
+
+    def _open_selected_pair(self):
+        table = self._table
+        if not table or not getattr(self, '_display_pairs', None):
+            return
+        try:
+            coord = table.cursor_coordinate
+            if coord is None:
+                return
+            row_index = getattr(coord, 'row', None)
+            if row_index is None or row_index < 0 or row_index >= len(self._display_pairs):
+                return
+            pair = self._display_pairs[row_index]
+            from .diff_viewer import SideBySideDiffScreen
+
+            # Navigation context removed; open only the selected pair
+            self.app.push_screen(
+                SideBySideDiffScreen(
+                    pair.new_path,
+                    pair.old_path,
+                    keywords_path=self.keywords_path,
+                )
+            )
+        except Exception:
+            pass
+
+    # --- Actions for help/discoverability ---
+    def action_next_row(self):
+        table = self._table
+        if not table:
+            return
+        try:
+            coord = table.cursor_coordinate
+            cur = getattr(coord, 'row', 0) if coord is not None else 0
+        except Exception:
+            cur = 0
+        try:
+            total = getattr(table, 'row_count', None)
+            if total is None:
+                total = len(getattr(table, 'rows', []))
+        except Exception:
+            total = 0
+        if total:
+            try:
+                table.move_cursor(row=min(cur + 1, total - 1), column=0)
+                scroll_to_row = getattr(table, 'scroll_to_row', None)
+                if callable(scroll_to_row):
+                    scroll_to_row(min(cur + 1, total - 1))
+                else:
+                    scroll_to_cursor = getattr(table, 'scroll_to_cursor', None)
+                    if callable(scroll_to_cursor):
+                        scroll_to_cursor()
+            except Exception:
+                pass
+        self._last_g = False
+
+    def action_prev_row(self):
+        table = self._table
+        if not table:
+            return
+        try:
+            coord = table.cursor_coordinate
+            cur = getattr(coord, 'row', 0) if coord is not None else 0
+        except Exception:
+            cur = 0
+        try:
+            # row_count may not exist on older versions; fallback to rows length
+            total = getattr(table, 'row_count', None)
+            if total is None:
+                total = len(getattr(table, 'rows', []))
+        except Exception:
+            total = 0
+        if total:
+            try:
+                table.move_cursor(row=max(cur - 1, 0), column=0)
+                scroll_to_row = getattr(table, 'scroll_to_row', None)
+                if callable(scroll_to_row):
+                    scroll_to_row(max(cur - 1, 0))
+                else:
+                    scroll_to_cursor = getattr(table, 'scroll_to_cursor', None)
+                    if callable(scroll_to_cursor):
+                        scroll_to_cursor()
+            except Exception:
+                pass
+        self._last_g = False
+
+    def action_end(self):
+        table = self._table
+        if not table:
+            return
+        try:
+            total = getattr(table, 'row_count', None)
+            if total is None:
+                total = len(getattr(table, 'rows', []))
+        except Exception:
+            total = 0
+        if total:
+            try:
+                table.move_cursor(row=total - 1, column=0)
+                scroll_to_row = getattr(table, 'scroll_to_row', None)
+                if callable(scroll_to_row):
+                    scroll_to_row(total - 1)
+                else:
+                    scroll_to_cursor = getattr(table, 'scroll_to_cursor', None)
+                    if callable(scroll_to_cursor):
+                        scroll_to_cursor()
+            except Exception:
+                pass
+        self._last_g = False

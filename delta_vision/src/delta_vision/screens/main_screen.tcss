@@ -1,0 +1,136 @@
+/* Delta Vision Home - polished hero + cards */
+
+Screen {
+    background: $surface-darken-3;
+    color: $text;
+}
+
+/* Header bar to match footer styling */
+Header {
+    dock: top;
+    background: $panel-darken-2;
+    border-bottom: heavy $primary;
+    padding: 0 1;
+    text-style: bold;
+}
+
+#main-root {
+    padding: 1 0;
+    height: 1fr;
+}
+
+/* Hero */
+#hero {
+    background: $panel-darken-2;
+    border: round $primary;
+    padding: 0 0;
+    height: auto;       /* allow title banner + tagline to fit */
+    min-height: 5;      /* ensure presence even without tagline */
+    margin: 0 2 1 2;
+}
+
+#title {
+    color: $accent;
+    text-style: bold;
+    text-align: center;
+    background: $panel-darken-1;
+    border: heavy $accent;   /* bold banner look */
+    padding: 0 3;            /* wider shoulders */
+    height: 3;               /* taller for prominence */
+    align: center middle;    /* center within hero */
+    margin: 0 2;             /* add some breathing room from edges */
+}
+
+#tagline {
+    color: $text-muted;
+    text-align: center;
+    margin-top: 0;
+}
+
+/* Actions grid: 2 rows x 2 columns */
+#actions-grid {
+    layout: vertical;
+    height: 30;
+    padding: 0 2 2 2; /* reduce large bottom padding */
+    margin: 1 2 2 2;
+}
+
+.actions-row {
+    layout: horizontal;
+}
+
+.action-card {
+    background: $panel-darken-2;
+    border: round $primary;
+    padding: 1 2;
+    width: 1fr;
+}
+
+.action-card .desc {
+    color: $text-muted;
+    margin-top: 1;
+    text-align: center;
+}
+
+/* Buttons inside cards */
+#stream_button, #search_button, #keywords_button, #compare_button {
+    width: 100%;
+    text-style: bold;
+}
+
+/* Themes row */
+#themes-row {
+    layout: vertical;
+    margin: 0 0 0 0;
+    padding: 1 0 0 1; /* remove left padding to eliminate left gap */
+    background: $panel-darken-2;
+    border: round $primary;
+    /* Let the panel size to content up to a reasonable max, then scroll */
+    height: 9;
+    max-height: 14; /* show title + up to ~3 rows comfortably */
+}
+
+/* Title inside the panel */
+#themes-title {
+    color: $accent;
+    text-style: bold underline;
+    text-align: center;
+    min-height: 1;
+}
+
+/* One line of theme switches; auto-height so widgets fit */
+.themes-row-line {
+    layout: horizontal;
+    height: 1;          /* fixed height instead of min-height */
+    margin: 0;
+    padding: 0;
+}
+
+.theme-item {
+    layout: horizontal;
+    align: left middle;
+    padding: 0;
+    margin: 0 0 0 0;
+    width: 25; /* ensure alignment across rows */
+}
+
+.theme-label {
+    color: $text-muted;
+}
+
+/* Keep switches compact */
+.themes-row-line Switch {
+    padding: 0;
+    margin: 0;          /* ensure no implicit left margin */
+    align: left middle;
+    border: none;
+}
+
+/* Footer bar for Home */
+.footer {
+    dock: bottom;
+    background: $panel-darken-2;
+    border-top: heavy $primary;
+    padding: 0 1;
+    text-style: bold;
+}
