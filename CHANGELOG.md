@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 - TBD
 
+## [0.1.1] - 2025-08-17
+- GitHub Releases now include self-contained tar.gz (Linux/macOS) and zip (Windows) bundles
+- Added README-RUN to standalone bundle
+- Release workflow refinements
+
 ## [0.1.0] - 2025-08-17
 - Initial remote multi-user server/client mode (WebSocket + PTY)
 - CLI flags: --server/--client/--host/--port, env overrides
