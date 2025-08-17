@@ -5,6 +5,9 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 - TBD
 
+## [0.1.2] - 2025-08-17
+- Fix release workflow YAML; ensure tar.gz uploads for Linux/macOS
+
 ## [0.1.1] - 2025-08-17
 - GitHub Releases now include self-contained tar.gz (Linux/macOS) and zip (Windows) bundles
 - Added README-RUN to standalone bundle
