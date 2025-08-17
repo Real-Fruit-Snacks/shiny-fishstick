@@ -72,11 +72,26 @@ jobs:
           TAG="${GITHUB_REF_NAME}"
           OSNAME="${{ runner.os }}"
           mkdir -p release
-          ZIP_PATH="release/${NAME}-${TAG}-${OSNAME}.zip"
+          # Add a quick-start README inside the bundle
+          cat > dist/${NAME}/README-RUN.txt << 'EOF'
+Delta Vision — standalone bundle
+
+Usage:
+  Linux/macOS: ./deltavision --new /path/to/New --old /path/to/Old --keywords /path/to/keywords.md
+  Windows:     deltavision.exe --new C:\\path\\to\\New --old C:\\path\\to\\Old --keywords C:\\path\\to\\keywords.md
+
+Notes:
+  - No additional dependencies required.
+  - For server mode: `./deltavision --server --port 8765 ...`
+  - For client mode: `./deltavision --client --host 1.2.3.4 --port 8765`
+EOF
+
           if [[ "${OSNAME}" == "Windows" ]]; then
-            (cd dist && 7z a -tzip "../${ZIP_PATH}" "${NAME}")
+            ARCHIVE_PATH="release/${NAME}-${TAG}-${OSNAME}.zip"
+            (cd dist && 7z a -tzip "../${ARCHIVE_PATH}" "${NAME}")
           else
-            (cd dist && zip -r "../${ZIP_PATH}" "${NAME}")
+            ARCHIVE_PATH="release/${NAME}-${TAG}-${OSNAME}.tar.gz"
+            (cd dist && tar -czf "../${ARCHIVE_PATH}" "${NAME}")
           fi
 
       - name: Upload binary artifact
