@@ -73,18 +73,16 @@ jobs:
           OSNAME="${{ runner.os }}"
           mkdir -p release
           # Add a quick-start README inside the bundle
-          cat > dist/${NAME}/README-RUN.txt << 'EOF'
-            Delta Vision — standalone bundle
-
-            Usage:
-              Linux/macOS: ./deltavision --new /path/to/New --old /path/to/Old --keywords /path/to/keywords.md
-              Windows:     deltavision.exe --new C:\\path\\to\\New --old C:\\path\\to\\Old --keywords C:\\path\\to\\keywords.md
-
-            Notes:
-              - No additional dependencies required.
-              - For server mode: `./deltavision --server --port 8765 ...`
-              - For client mode: `./deltavision --client --host 1.2.3.4 --port 8765`
-EOF
+          {
+            printf '%s\n' 'Delta Vision — standalone bundle'
+            printf '%s\n' '' 'Usage:'
+            printf '%s\n' '  Linux/macOS: ./deltavision --new /path/to/New --old /path/to/Old --keywords /path/to/keywords.md'
+            printf '%s\n' '  Windows:     deltavision.exe --new C:\\path\\to\\New --old C:\\path\\to\\Old --keywords C:\\path\\to\\keywords.md'
+            printf '%s\n' '' 'Notes:'
+            printf '%s\n' '  - No additional dependencies required.'
+            printf '%s\n' '  - For server mode: ./deltavision --server --port 8765 ...'
+            printf '%s\n' '  - For client mode: ./deltavision --client --host 1.2.3.4 --port 8765'
+          } > "dist/${NAME}/README-RUN.txt"
 
           if [[ "${OSNAME}" == "Windows" ]]; then
             ARCHIVE_PATH="release/${NAME}-${TAG}-${OSNAME}.zip"
