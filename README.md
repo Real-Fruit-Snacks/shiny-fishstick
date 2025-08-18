@@ -5,21 +5,27 @@ Delta Vision is a Textual‑powered terminal UI for comparing folders, reviewing
 Works on Linux, macOS, and Windows.
 
 
-## Install and run
+## Download and run (no external dependencies)
 
-Install from PyPI (recommended):
+Grab one of the release artifacts (Linux):
+
+- Standalone (PyInstaller): `deltavision-<version>-Linux.tar.gz`
+    - Extract and run the `deltavision` binary.
+- App-style untar-and-run (embedded venv): `deltavision-<version>-linux-app.tar.gz`
+    - Extract, `cd delta_vision`, and run `./run.sh`.
+
+Examples:
 
 ```bash
-pipx install deltavision    # or: pip install deltavision
+# Standalone bundle
+tar -xzf deltavision-<version>-Linux.tar.gz
+./deltavision --new /path/to/New --old /path/to/Old --keywords /path/to/keywords.md
+
+# App-style bundle
+tar -xzf deltavision-<version>-linux-app.tar.gz
+cd delta_vision
+./run.sh --new /path/to/New --old /path/to/Old --keywords /path/to/keywords.md
 ```
-
-Run locally:
-
-```bash
-deltavision --new /path/to/New --old /path/to/Old --keywords /path/to/keywords.md
-```
-
-No extras required — networking support is included by default.
 
 
 ## Remote multi‑user (server/client)
@@ -27,7 +33,14 @@ No extras required — networking support is included by default.
 Start a server (spawns one PTY/Textual session per client):
 
 ```bash
-python -m delta_vision --server --port 8765 \
+# Standalone bundle
+./deltavision --server --port 8765 \
+    --new /path/to/New \
+    --old /path/to/Old \
+    --keywords /path/to/keywords.md
+
+# App-style bundle
+./run.sh --server --port 8765 \
     --new /path/to/New \
     --old /path/to/Old \
     --keywords /path/to/keywords.md
@@ -36,7 +49,11 @@ python -m delta_vision --server --port 8765 \
 Connect from a client terminal:
 
 ```bash
-python -m delta_vision --client --host 1.2.3.4 --port 8765
+# Standalone
+./deltavision --client --host 1.2.3.4 --port 8765
+
+# App-style
+./run.sh --client --host 1.2.3.4 --port 8765
 ```
 
 Environment variables (optional): `DELTA_NEW`, `DELTA_OLD`, `DELTA_KEYWORDS`, `DELTA_NOTES`, `DELTA_MODE`, `DELTA_HOST`, `DELTA_PORT`.
@@ -50,28 +67,36 @@ Environment variables (optional): `DELTA_NEW`, `DELTA_OLD`, `DELTA_KEYWORDS`, `D
 - Notes drawer (Ctrl+N), bundled themes (default ayu‑mirage)
 
 
-## Build a standalone binary (optional)
+## Local developer install (optional)
 
-You can ship a single self‑contained binary (no Python required):
-
-```bash
-pip install pyinstaller
-pyinstaller -y delta_vision/packaging/deltavision.spec
-```
-
-The binary will be in `dist/deltavision`.
-
-
-## Development
+If you prefer a dev install from source:
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -U pip
 pip install -e delta_vision
-pip install -U pytest ruff
-pytest -q
 ```
+
+Run:
+
+```bash
+python -m delta_vision --new /path/to/New --old /path/to/Old --keywords /path/to/keywords.md
+```
+
+
+## Build a local release (maintainers)
+
+Build dependency‑free artifacts locally and compute checksums:
+
+```bash
+bash scripts/make_release.sh
+```
+
+This produces:
+
+- `release/deltavision-<version>-Linux.tar.gz`
+- `release/deltavision-<version>-linux-app.tar.gz`
 
 
 ## License

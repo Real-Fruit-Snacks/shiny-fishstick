@@ -47,7 +47,5 @@ jobs:
           files: |
             release/deltavision-${{ env.VERSION }}-linux-app.tar.gz
             release/deltavision-${{ env.VERSION }}-Linux.tar.gz
-            release/deltavision-${{ env.VERSION }}-source.tar.gz
-            delta_vision/dist/deltavision-${{ env.VERSION }}-py3-none-any.whl
-            delta_vision/dist/deltavision-${{ env.VERSION }}.tar.gz
+
 

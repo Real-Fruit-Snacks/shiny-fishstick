@@ -2,9 +2,9 @@
 set -euo pipefail
 
 # make_release.sh - Build local release artifacts without CI
-# Produces:
-# - delta_vision/dist/*.whl and *.tar.gz (sdist, wheel)
-# - release/deltavision-<version>-Linux.tar.gz (standalone bundle)
+# Produces only no-external-deps artifacts:
+# - release/deltavision-<version>-Linux.tar.gz (PyInstaller standalone)
+# - release/deltavision-<version>-linux-app.tar.gz (embedded venv, untar-and-run)
 
 ROOT_DIR=$(cd "$(dirname "$0")/.." && pwd)
 cd "$ROOT_DIR"
@@ -24,9 +24,7 @@ if [[ -d .venv ]]; then
   source .venv/bin/activate
 fi
 
-printf '\n==> Building sdist and wheel...\n'
-python -m pip install -U pip build >/dev/null
-python -m build -s -w delta_vision
+printf '\n==> Skipping sdist/wheel (we ship only no-deps artifacts)...\n'
 
 # Build standalone bundle (Linux)
 printf '\n==> Building standalone bundle (PyInstaller)...\n'
@@ -54,9 +52,12 @@ TARBALL="release/deltavision-${VERSION}-Linux.tar.gz"
   cd dist
   tar -czf "../${TARBALL}" deltavision README-RUN.txt
 )
+sha256sum "${TARBALL}" || shasum -a 256 "${TARBALL}" || true
+
+printf '\n==> Building embedded-venv untar-and-run app bundle...\n'
+bash scripts/make_app_bundle_tar.sh
 
 printf '\nArtifacts:\n'
-ls -1 delta_vision/dist/* | sed 's/^/  /'
 ls -1 release/* | sed 's/^/  /'
 
 printf '\nDone.\n'
