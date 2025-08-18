@@ -3,6 +3,58 @@ name: Release
 on:
   push:
     tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to release (e.g., v0.1.3)'
+        required: true
+
+jobs:
+  github-release:
+    name: Create GitHub Release and upload artifacts
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.tag || github.ref_name }}
+
+      - name: Derive version from tag
+        id: vars
+        run: |
+          TAG_NAME="${{ inputs.tag || github.ref_name }}"
+          echo "TAG_NAME=$TAG_NAME" >> $GITHUB_ENV
+          VERSION="${TAG_NAME#v}"
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+          echo "Release tag: $TAG_NAME"
+          echo "Release version: $VERSION"
+
+      - name: List artifacts present in repo
+        run: |
+          ls -l release || true
+          ls -l delta_vision/dist || true
+
+      - name: Create GitHub Release and upload files
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.TAG_NAME }}
+          name: Delta Vision ${{ env.TAG_NAME }}
+          body_path: release/RELEASE-NOTES-${{ env.TAG_NAME }}.md
+          draft: false
+          prerelease: false
+          files: |
+            release/deltavision-${{ env.VERSION }}-linux-app.tar.gz
+            release/deltavision-${{ env.VERSION }}-Linux.tar.gz
+            release/deltavision-${{ env.VERSION }}-source.tar.gz
+            delta_vision/dist/deltavision-${{ env.VERSION }}-py3-none-any.whl
+            delta_vision/dist/deltavision-${{ env.VERSION }}.tar.gz
+name: Release
+
+on:
+  push:
+    tags:
       - "v*.*.*"
 
 permissions:
