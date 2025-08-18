@@ -4,7 +4,7 @@ import os
 import threading
 from typing import Callable
 
-from watchdog.events import FileSystemEventHandler
+from watchdog.events import FileSystemEventHandler, FileSystemEvent
 from watchdog.observers import Observer
 
 from .logger import log
@@ -41,8 +41,15 @@ class _DebouncedHandler(FileSystemEventHandler):
                 self._timer = None
 
     # Watchdog hooks
-    def on_any_event(self, event):  # type: ignore[override]
-        log("[WATCHDOG] Event:", getattr(event, "event_type", "?"), "on", getattr(event, "src_path", ""))
+    def on_any_event(self, event: FileSystemEvent):  # type: ignore[override]
+        # Only react to events that likely change file contents or names.
+        et = getattr(event, "event_type", "")
+        if et not in ("modified", "created", "moved", "deleted"):
+            return
+        try:
+            log("[WATCHDOG] Event:", et, "on", getattr(event, "src_path", ""))
+        except Exception:
+            pass
         self._schedule()
 
 

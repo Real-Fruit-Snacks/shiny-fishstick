@@ -1,6 +1,7 @@
 import argparse
 import asyncio
 import os
+import sys
 import tempfile
 
 from textual.app import App
@@ -50,15 +51,19 @@ def main():
             if os.environ.get('DELTA_CLIENT') in {'1', 'true', 'yes', 'on'}:
                 args.client = True
 
-    # Host/Port env overrides: apply if env is set
+    # Host/Port env overrides: only apply when the CLI didn't specify them
+    argv = sys.argv[1:]
+    cli_specified_port = any(a == '--port' or a.startswith('--port=') for a in argv)
+    cli_specified_host = any(a == '--host' or a.startswith('--host=') for a in argv)
+
     env_port = os.environ.get('DELTA_PORT')
-    if env_port:
+    if env_port and not cli_specified_port:
         try:
             args.port = int(env_port)
         except ValueError:
             pass
     env_host = os.environ.get('DELTA_HOST')
-    if env_host:
+    if env_host and not cli_specified_host:
         args.host = env_host
 
     class HomeApp(App):
