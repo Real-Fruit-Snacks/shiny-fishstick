@@ -4,7 +4,7 @@ import os
 import threading
 from typing import Callable
 
-from watchdog.events import FileSystemEventHandler, FileSystemEvent
+from watchdog.events import FileSystemEvent, FileSystemEventHandler
 from watchdog.observers import Observer
 
 from .logger import log

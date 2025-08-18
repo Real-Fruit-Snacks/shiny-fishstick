@@ -1,6 +1,6 @@
-# Sorted imports
 import asyncio
 import fcntl
+import json
 import os
 import pty
 import signal
@@ -17,7 +17,79 @@ _SIGNALS_REGISTERED = False
 
 RESIZE_PREFIX = "RESIZE "
 
-async def handle_client(websocket, *, child_env: Optional[Dict[str, str]] = None, addr: Optional[str | tuple] = None):
+# ---- Notes collaboration state (shared across all sessions) ----
+NOTES_ROUTE = "/notes"
+SHARED_NOTES_TEXT: str = ""
+NOTES_SUBSCRIBERS = set()  # websocket connections
+
+async def _notes_broadcast(payload: dict) -> None:
+    """Broadcast a JSON payload to all current notes subscribers."""
+    if not NOTES_SUBSCRIBERS:
+        return
+    data = json.dumps(payload)
+    dead = []
+    for ws in list(NOTES_SUBSCRIBERS):
+        try:
+            sender = getattr(ws, "send", None)
+            if sender is None:
+                dead.append(ws)
+            else:
+                await sender(data)
+        except Exception:
+            dead.append(ws)
+    for ws in dead:
+        try:
+            NOTES_SUBSCRIBERS.discard(ws)
+        except Exception:
+            pass
+
+async def handle_notes_channel(websocket):
+    """Handle /notes websocket connections.
+
+    Protocol (JSON text frames):
+      - Server -> client on connect: {"type":"sync","text": <str>}
+      - Client -> server on edit:   {"type":"update","text": <str>, "client_id": <str>}
+      - Server -> all on update:    {"type":"sync","text": <str>, "source": <str>}
+    """
+    # Register
+    NOTES_SUBSCRIBERS.add(websocket)
+    try:
+        # Initial sync to the new client
+        await websocket.send(json.dumps({"type": "sync", "text": SHARED_NOTES_TEXT}))
+        # Listen for updates
+        async for msg in websocket:
+            try:
+                if not isinstance(msg, str):
+                    # Ignore non-text frames on notes channel
+                    continue
+                obj = json.loads(msg)
+            except Exception:
+                continue
+            if not isinstance(obj, dict):
+                continue
+            if obj.get("type") == "update":
+                text = obj.get("text")
+                source = obj.get("client_id")
+                if not isinstance(text, str):
+                    continue
+                # Update shared state then broadcast to everyone (including sender)
+                global SHARED_NOTES_TEXT
+                SHARED_NOTES_TEXT = text
+                await _notes_broadcast({"type": "sync", "text": SHARED_NOTES_TEXT, "source": source})
+            # else: ignore unknown types
+    finally:
+        try:
+            NOTES_SUBSCRIBERS.discard(websocket)
+        except Exception:
+            pass
+
+async def handle_client(
+    websocket,
+    *,
+    child_env: Optional[Dict[str, str]] = None,
+    addr: Optional[str | tuple] = None,
+    server_port: Optional[int] = None,
+):
     import subprocess
     # PTY for the Delta Vision child process
     master_fd, slave_fd = pty.openpty()
@@ -35,6 +107,12 @@ async def handle_client(websocket, *, child_env: Optional[Dict[str, str]] = None
         for k, v in child_env.items():
             if v is not None:
                 env[str(k)] = str(v)
+    # Provide notes websocket URL to child app so it can collaborate
+    try:
+        if server_port:
+            env.setdefault('DELTA_NOTES_WS', f"ws://127.0.0.1:{server_port}{NOTES_ROUTE}")
+    except Exception:
+        pass
 
     proc = subprocess.Popen(
         child_argv,
@@ -148,11 +226,20 @@ async def start_server(*, port: int, child_env: Optional[Dict[str, str]] = None)
     async def _handler(ws):
         # Best-effort peer address extraction
         peer = getattr(ws, "remote_address", None)
-        log(f"[server] client connected: {peer}")
-        try:
-            return await handle_client(ws, child_env=child_env, addr=peer)
-        finally:
-            log(f"[server] client disconnected: {peer}")
+        # Route based on path: /notes is collaboration channel; anything else is a session
+        path = getattr(ws, "path", "/")
+        if path == NOTES_ROUTE:
+            log(f"[server] notes client connected: {peer}")
+            try:
+                return await handle_notes_channel(ws)
+            finally:
+                log(f"[server] notes client disconnected: {peer}")
+        else:
+            log(f"[server] client connected: {peer}")
+            try:
+                return await handle_client(ws, child_env=child_env, addr=peer, server_port=port)
+            finally:
+                log(f"[server] client disconnected: {peer}")
 
     async with serve(_handler, '0.0.0.0', port, ping_interval=20, max_size=None) as _server:
         # Wait until a signal asks us to stop

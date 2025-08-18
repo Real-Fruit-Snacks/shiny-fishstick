@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import asyncio
+import json
 import os
+import secrets
+import string
 
 from textual.app import ComposeResult
 from textual.containers import Vertical
@@ -11,8 +15,8 @@ class NotesDrawer(Vertical):
     """Bottom pop-up notes drawer with save-on-close and dynamic header path display."""
 
     BINDINGS = [
-        ("escape", "close", "Close Notes"),
-        ("ctrl+n", "toggle", "Toggle Notes"),
+        ("escape", "close_notes", "Close Notes"),
+        ("ctrl+n", "toggle_notes", "Toggle Notes"),
     ]
 
     DEFAULT_CSS = """
@@ -58,6 +62,13 @@ class NotesDrawer(Vertical):
         self._previous_focus = None
         self._save_path = save_path
         self._loaded_text = None
+    # Collaboration state
+        self._notes_ws_url = os.environ.get("DELTA_NOTES_WS") or None
+        self._ws_task = None
+        self._ws = None
+        self._client_id = self._make_client_id()
+        self._send_debounce_handle = None
+        self._last_remote_update_source = None
 
     def compose(self) -> ComposeResult:
         self._title = Static("📝  Notes  (Esc to close, Ctrl+N to toggle)", classes="notes-title")
@@ -87,6 +98,12 @@ class NotesDrawer(Vertical):
         # in-memory edits when remounting between screens.
         self._load_from_disk(if_empty_only=True)
         self._update_title()
+        # Start collaboration channel if available
+        try:
+            if self._notes_ws_url and self._ws_task is None:
+                self._ws_task = asyncio.create_task(self._notes_ws_loop(self._notes_ws_url))
+        except Exception:
+            self._ws_task = None
 
     def on_unmount(self) -> None:
         # Persist on unmount so switching screens doesn't lose in-memory edits
@@ -94,12 +111,18 @@ class NotesDrawer(Vertical):
             self._persist_notes()
         except Exception:
             pass
+        # Stop collaboration loop
+        try:
+            if self._ws_task and not self._ws_task.done():
+                self._ws_task.cancel()
+        except Exception:
+            pass
 
     # Actions
-    def action_close(self) -> None:
+    def action_close_notes(self) -> None:
         self.close()
 
-    def action_toggle(self) -> None:
+    def action_toggle_notes(self) -> None:
         self.toggle()
 
     # Key fallback
@@ -187,6 +210,105 @@ class NotesDrawer(Vertical):
         self._loaded_text = None
         self._update_title()
         self._load_from_disk(if_empty_only=True)
+
+    # --- Collaboration wiring ---
+    def _make_client_id(self) -> str:
+        try:
+            alphabet = string.ascii_lowercase + string.digits
+            return "cli-" + "".join(secrets.choice(alphabet) for _ in range(8))
+        except Exception:
+            return "cli-xxxxxxx"
+
+    async def _notes_ws_loop(self, url: str) -> None:
+        """Background task: connect to server /notes and keep state in sync.
+
+        - On connect, server will send a full sync we apply to the editor.
+        - On editor changes, we debounce and push updates.
+        - On incoming sync from others, we apply and show a toast.
+        - Reconnect with a short backoff if the connection drops.
+        """
+        try:
+            import websockets  # type: ignore
+        except Exception:
+            return
+        backoff = 0.5
+        while True:
+            try:
+                async with websockets.connect(url, ping_interval=20, max_size=None) as ws:  # type: ignore
+                    self._ws = ws
+                    # Receive loop
+                    async for msg in ws:
+                        try:
+                            if not isinstance(msg, str):
+                                continue
+                            data = json.loads(msg)
+                        except Exception:
+                            continue
+                        if not isinstance(data, dict):
+                            continue
+                        if data.get("type") == "sync":
+                            text = data.get("text")
+                            source = data.get("source")
+                            if isinstance(text, str):
+                                self._apply_remote_text(text, source)
+                    self._ws = None
+            except asyncio.CancelledError:
+                break
+            except Exception:
+                self._ws = None
+                # Reconnect after backoff
+                try:
+                    await asyncio.sleep(backoff)
+                except Exception:
+                    break
+                # Cap backoff modestly
+                backoff = min(backoff * 2, 4.0)
+
+    def _apply_remote_text(self, text: str, source: str | None) -> None:
+        # Update editor content if changed; show a toast if it came from others
+        try:
+            current = self._area.text if self._area else ""
+            if text != current:
+                if self._area is not None:
+                    self._area.text = text
+                self._loaded_text = text
+                try:
+                    if self.app and source and source != self._client_id:
+                        self.app.notify("📝 Notes updated by another user", timeout=3)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+    def _schedule_send_update(self) -> None:
+        # Debounce sending frequent edits
+        try:
+            loop = asyncio.get_running_loop()
+            if self._send_debounce_handle and not self._send_debounce_handle.cancelled():
+                self._send_debounce_handle.cancel()
+            self._send_debounce_handle = loop.call_later(0.3, lambda: asyncio.create_task(self._send_update_now()))
+        except Exception:
+            pass
+
+    async def _send_update_now(self) -> None:
+        try:
+            if not self._ws:
+                return
+            text = self._area.text if self._area else ""
+            payload = {"type": "update", "text": text, "client_id": self._client_id}
+            await self._ws.send(json.dumps(payload))
+        except Exception:
+            pass
+
+    # Text change hook from TextArea
+    def on_text_area_changed(self, event: TextArea.Changed) -> None:  # type: ignore[override]
+        # When user types, schedule an update to server
+        try:
+            # Update local-loaded snapshot so _persist_notes only writes when needed
+            self._loaded_text = None
+        except Exception:
+            pass
+        self._schedule_send_update()
 
     def _persist_notes(self) -> None:
         try:
