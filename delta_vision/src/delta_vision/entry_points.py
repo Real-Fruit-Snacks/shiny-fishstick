@@ -44,13 +44,24 @@ class HomeApp(App):
 
     @theme.setter
     def theme(self, value):
-        """Set theme using parent class setter."""
+        """Set theme using Textual's Reactive system."""
         try:
-            # Use the parent class setter if available
-            type(self.__class__.__bases__[0]).theme.fset(self, value)
-        except (AttributeError, TypeError):
-            # Fallback - store as instance variable
-            self._theme = value
+            # Use the base App class to set the theme properly
+            from textual.app import App
+            App.theme.__set__(self, value or 'textual-dark')
+        except (AttributeError, TypeError, ValueError):
+            # Fallback to ensure theme is never None
+            from textual.app import App
+            App.theme.__set__(self, 'textual-dark')
+        except Exception:
+            # Handle InvalidThemeError and other theme-related errors gracefully
+            # This ensures theme changes don't crash the app if theme doesn't exist
+            from textual.app import App
+            try:
+                App.theme.__set__(self, 'textual-dark')
+            except Exception:
+                # Ultimate fallback - store as instance variable
+                self._theme = 'textual-dark'
 
     def __init__(
         self,
