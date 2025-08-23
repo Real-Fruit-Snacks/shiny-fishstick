@@ -381,7 +381,7 @@ class SearchScreen(BaseTableScreen):
                 Text.from_markup(
                     f"Found [bold]{match_count}[/bold] match(es) across "
                     f"[bold]{files_scanned}[/bold] file(s){capped_note}{err_fragment} "
-                    f"in [bold]{elapsed:.3f}s[/bold] for: '[magenta]{query}[/magenta]'"
+                    f"in [bold]{elapsed:.3f}s[/bold] for: '[bold yellow]{query}[/bold yellow]'"
                 )
             )
         except (AttributeError, RuntimeError) as e:
@@ -505,8 +505,8 @@ class SearchScreen(BaseTableScreen):
                 plain_line = line  # Use original line for pattern matching
                 for match in search_pattern.finditer(plain_line):
                     start, end = match.span()
-                    # Use a distinctive style for search matches that will overlay keyword highlighting
-                    preview_text.stylize("bold white on magenta", start, end)
+                    # Use a more subtle style for search matches that will overlay keyword highlighting
+                    preview_text.stylize("bold black on yellow", start, end)
 
             return preview_text
         except (AttributeError, ValueError, re.error) as e:
