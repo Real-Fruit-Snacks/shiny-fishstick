@@ -9,6 +9,8 @@ so tests don't fail.
 
 from __future__ import annotations
 
+from delta_vision.utils.logger import log
+
 try:
     from textual.app import App  # type: ignore
 
@@ -22,14 +24,17 @@ try:
             except OSError:
                 # Ignore invalid handle errors on Windows test environments
                 return None
-            except Exception:
+            except (OSError, IOError, RuntimeError) as e:
                 # Be conservative: never let printing crash the app
+                log(f"[INIT] App._print failed: {e}")
                 return None
 
         try:
             App._print = _safe_print
-        except Exception:
+        except (AttributeError, RuntimeError) as e:
+            log(f"[INIT] Failed to patch App._print: {e}")
             pass
-except Exception:
+except (ImportError, ModuleNotFoundError) as e:
     # If Textual isn't available at import time, skip the patch
+    log(f"[INIT] Textual not available, skipping patch: {e}")
     pass

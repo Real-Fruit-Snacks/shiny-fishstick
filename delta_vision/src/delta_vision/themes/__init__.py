@@ -12,9 +12,12 @@ from __future__ import annotations
 import importlib
 import pkgutil
 
+from delta_vision.utils.logger import log
+
 try:
     from textual.theme import Theme  # type: ignore
-except Exception:  # pragma: no cover - textual not loaded yet in some tools
+except (ImportError, ModuleNotFoundError):  # pragma: no cover - textual not loaded yet in some tools
+    log("Failed to import textual.theme.Theme, using fallback object")
     Theme = object  # type: ignore
 
 
@@ -31,7 +34,8 @@ def discover_themes():
     for modinfo in pkgutil.iter_modules(__path__, prefix=__name__ + "."):
         try:
             mod = importlib.import_module(modinfo.name)
-        except Exception:
+        except (ImportError, ModuleNotFoundError):
+            log(f"Failed to import theme module: {modinfo.name}")
             continue
         try:
             if hasattr(mod, "THEMES"):
@@ -41,7 +45,8 @@ def discover_themes():
                 themes.extend(_coerce_to_list(got))
             elif hasattr(mod, "theme"):
                 themes.extend(_coerce_to_list(mod.theme))
-        except Exception:
+        except (AttributeError, ValueError, TypeError):
+            log(f"Failed to extract themes from module: {modinfo.name}")
             continue
     return themes
 
@@ -56,8 +61,9 @@ def register_all_themes(app) -> int:
         try:
             app.register_theme(theme)
             count += 1
-        except Exception:
+        except (RuntimeError, ValueError, TypeError):
             # Skip duplicates or invalid themes
+            log(f"Failed to register theme: {getattr(theme, 'name', 'unknown')}")
             pass
 
     # Fallback: register built-in themes matching file names when module exports are empty
@@ -65,12 +71,14 @@ def register_all_themes(app) -> int:
         existing = set()
         try:
             existing = set(getattr(app, "available_themes", {}).keys())
-        except Exception:
+        except AttributeError:
+            log("Failed to get existing themes from app, using empty set")
             existing = set()
         for modinfo in pkgutil.iter_modules(__path__, prefix=__name__ + "."):
             try:
                 stem = modinfo.name.rsplit(".", 1)[-1]
-            except Exception:
+            except (ValueError, IndexError):
+                log(f"Failed to extract module stem from: {modinfo.name}")
                 continue
             if stem.startswith("__"):
                 continue
@@ -84,7 +92,8 @@ def register_all_themes(app) -> int:
                     if hasattr(app, "get_theme"):
                         # type: ignore[attr-defined]
                         theme_obj = app.get_theme(name)
-                except Exception:
+                except (AttributeError, ValueError, TypeError):
+                    log(f"Failed to get theme by name: {name}")
                     theme_obj = None
                 if theme_obj is None:
                     try:
@@ -93,7 +102,8 @@ def register_all_themes(app) -> int:
                             results = app.search_themes(name)
                             if results and name in results:
                                 theme_obj = results[name]
-                    except Exception:
+                    except (AttributeError, ValueError, TypeError):
+                        log(f"Failed to search themes for: {name}")
                         theme_obj = None
                 if theme_obj is None:
                     continue
@@ -102,9 +112,11 @@ def register_all_themes(app) -> int:
                     existing.add(name)
                     count += 1
                     break
-                except Exception:
+                except (RuntimeError, ValueError, TypeError):
+                    log(f"Failed to register fallback theme: {name}")
                     pass
-    except Exception:
+    except (ImportError, AttributeError):
+        log("Failed during fallback theme discovery and registration")
         pass
 
     return count

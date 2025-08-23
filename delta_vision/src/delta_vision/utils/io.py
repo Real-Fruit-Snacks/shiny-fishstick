@@ -30,16 +30,18 @@ def read_text(
                 return f.read(), enc
         except UnicodeDecodeError:
             continue
-        except Exception:
+        except (OSError, IOError) as e:
             # For IO errors, propagate a simple, empty content result
             # (callers already guard and present an error row/message)
+            log(f"[IO] Failed to read {path} with {enc}: {e}")
             return ("", enc)
     if ignore_on_last and last_enc:
         try:
             with open(path, encoding=last_enc, errors="ignore") as f:
                 log(f"[IO] Decoded with ignore: {path} ({last_enc})")
                 return f.read(), f"{last_enc}+ignore"
-        except Exception:
+        except (OSError, IOError) as e:
+            log(f"[IO] Failed to read {path} with ignore mode: {e}")
             pass
     return ("", last_enc or "")
 

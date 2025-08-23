@@ -3,6 +3,8 @@ from __future__ import annotations
 import os
 from datetime import datetime
 
+from delta_vision.utils.logger import log
+
 """Filesystem time utilities.
 
 Policy: prefer modified time (mtime) across all platforms instead of creation
@@ -18,7 +20,8 @@ def get_mtime(path: str) -> float | None:
     """
     try:
         return os.path.getmtime(path)
-    except Exception:
+    except (OSError, IOError) as e:
+        log(f"[FS] Failed to get mtime for {path}: {e}")
         return None
 
 
@@ -30,7 +33,8 @@ def minutes_between(a: str, b: str) -> int | None:
         return None
     try:
         return int(round(abs(ta - tb) / 60.0))
-    except Exception:
+    except (ValueError, OverflowError, ArithmeticError) as e:
+        log(f"[FS] Failed to calculate minutes between files: {e}")
         return None
 
 
@@ -41,5 +45,6 @@ def format_mtime(path: str, fmt: str = "%Y-%m-%d %H:%M:%S") -> str | None:
         return None
     try:
         return datetime.fromtimestamp(ts).strftime(fmt)
-    except Exception:
+    except (ValueError, OSError) as e:
+        log(f"[FS] Failed to format mtime for {path}: {e}")
         return None

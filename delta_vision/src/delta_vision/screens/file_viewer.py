@@ -10,6 +10,7 @@ from textual.screen import Screen
 from textual.widgets import ListItem, ListView, Static
 
 from delta_vision.utils.io import read_lines
+from delta_vision.utils.logger import log
 from delta_vision.widgets.footer import Footer
 from delta_vision.widgets.header import Header
 
@@ -74,7 +75,8 @@ class FileViewerScreen(Screen):
         if self.keywords_path and os.path.isfile(self.keywords_path):
             try:
                 self.keywords_dict = parse_keywords_md(self.keywords_path)
-            except Exception:
+            except (OSError, IOError, ValueError, AttributeError):
+                log(f"Failed to parse keywords file {self.keywords_path}")
                 self.keywords_dict = None
 
         # Hide the first line (date/command header) from display
@@ -108,13 +110,15 @@ class FileViewerScreen(Screen):
                 subtitle_widget.update(f"Showing {shown} of {total} lines (truncated)")
             else:
                 subtitle_widget.update("")
-        except Exception:
+        except (AttributeError, RuntimeError):
+            log("Failed to update title and subtitle widgets")
             pass
 
         if self._list is not None:
             try:
                 self._list.clear()
-            except Exception:
+            except (AttributeError, RuntimeError):
+                log("Failed to clear list widget")
                 pass
 
             # Build keyword caches
@@ -136,13 +140,15 @@ class FileViewerScreen(Screen):
             # Set initial selection/scroll
             try:
                 self._list.index = target_index
-            except Exception:
+            except (AttributeError, ValueError, IndexError):
+                log(f"Failed to set list index to {target_index}")
                 pass
 
     def action_go_back(self):
         try:
             self.app.pop_screen()
-        except Exception:
+        except (AttributeError, RuntimeError):
+            log("Failed to pop screen")
             pass
 
     def on_key(self, event):
@@ -154,11 +160,13 @@ class FileViewerScreen(Screen):
                 return
             try:
                 self.set_focus(lv)
-            except Exception:
+            except (AttributeError, RuntimeError):
+                log("Failed to set focus on list view")
                 pass
             try:
                 event.stop()
-            except Exception:
+            except AttributeError:
+                log("Failed to stop event")
                 pass
             # no-op read of index removed (was unused)
             total = len(self._display_lines) if self._display_lines else 0
@@ -169,7 +177,8 @@ class FileViewerScreen(Screen):
                     scroll_to_index = getattr(lv, 'scroll_to_index', None)
                     if callable(scroll_to_index):
                         scroll_to_index(i)
-                except Exception:
+                except (AttributeError, ValueError, IndexError):
+                    log(f"Failed to set list index to {i}")
                     pass
 
             if self._last_g:
@@ -189,11 +198,13 @@ class FileViewerScreen(Screen):
             return
         try:
             self.set_focus(lv)
-        except Exception:
+        except (AttributeError, RuntimeError):
+            log("Failed to set focus on list view in next_line")
             pass
         try:
             cur = getattr(lv, 'index', 0) or 0
-        except Exception:
+        except AttributeError:
+            log("Failed to get current list index in next_line")
             cur = 0
         total = len(self._display_lines) if self._display_lines else 0
         if total:
@@ -203,7 +214,8 @@ class FileViewerScreen(Screen):
                 scroll_to_index = getattr(lv, 'scroll_to_index', None)
                 if callable(scroll_to_index):
                     scroll_to_index(new_i)
-            except Exception:
+            except (AttributeError, ValueError, IndexError):
+                log(f"Failed to move to next line (index {cur + 1})")
                 pass
         self._last_g = False
 
@@ -213,11 +225,13 @@ class FileViewerScreen(Screen):
             return
         try:
             self.set_focus(lv)
-        except Exception:
+        except (AttributeError, RuntimeError):
+            log("Failed to set focus on list view in prev_line")
             pass
         try:
             cur = getattr(lv, 'index', 0) or 0
-        except Exception:
+        except AttributeError:
+            log("Failed to get current list index in prev_line")
             cur = 0
         if True:
             try:
@@ -226,7 +240,8 @@ class FileViewerScreen(Screen):
                 scroll_to_index = getattr(lv, 'scroll_to_index', None)
                 if callable(scroll_to_index):
                     scroll_to_index(new_i)
-            except Exception:
+            except (AttributeError, ValueError, IndexError):
+                log(f"Failed to move to previous line (index {cur - 1})")
                 pass
         self._last_g = False
 
@@ -236,7 +251,8 @@ class FileViewerScreen(Screen):
             return
         try:
             self.set_focus(lv)
-        except Exception:
+        except (AttributeError, RuntimeError):
+            log("Failed to set focus on list view in end")
             pass
         total = len(self._display_lines) if self._display_lines else 0
         if total:
@@ -245,7 +261,8 @@ class FileViewerScreen(Screen):
                 scroll_to_index = getattr(lv, 'scroll_to_index', None)
                 if callable(scroll_to_index):
                     scroll_to_index(total - 1)
-            except Exception:
+            except (AttributeError, ValueError, IndexError):
+                log(f"Failed to jump to end (index {total - 1})")
                 pass
         self._last_g = False
 
@@ -277,5 +294,6 @@ class FileViewerScreen(Screen):
                 if i < len(self._display_lines):
                     markup = self._render_markup_for_line(i, self._display_lines[i])
                     static.update(Text.from_markup(markup))
-        except Exception:
+        except (AttributeError, ValueError, IndexError, UnicodeError):
+            log("Failed to repaint highlighting")
             pass

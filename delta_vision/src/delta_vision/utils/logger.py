@@ -16,8 +16,9 @@ def _can_write() -> bool:
         if app is None:
             return True
         return not bool(getattr(app, "is_headless", False))
-    except Exception:
+    except (ImportError, AttributeError, RuntimeError) as e:
         # If anything is odd, be safe and don't write
+        # Note: Can't use log() here to avoid infinite recursion
         return False
 
 
@@ -27,6 +28,7 @@ def log(*args: Any, sep: str = " ", end: str = "\n") -> None:
     try:
         sys.stdout.write(sep.join(str(a) for a in args) + end)
         sys.stdout.flush()
-    except Exception:
+    except (OSError, IOError, ValueError) as e:
         # Never raise from logging
+        # Note: Can't use log() here to avoid infinite recursion
         pass

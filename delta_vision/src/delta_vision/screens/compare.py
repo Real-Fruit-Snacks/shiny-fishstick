@@ -21,9 +21,11 @@ from textual.screen import Screen
 from textual.widgets import DataTable
 
 from delta_vision.utils.io import read_lines
+from delta_vision.utils.logger import log
 from delta_vision.utils.watchdog import start_observer
 from delta_vision.widgets.footer import Footer
 from delta_vision.widgets.header import Header
+from delta_vision.screens.diff_viewer import SideBySideDiffScreen
 
 
 @dataclass
@@ -111,7 +113,8 @@ class CompareScreen(Screen):
             # Row-only selection so the separator column isn't selectable
             if self._table and hasattr(self._table, "cursor_type"):
                 self._table.cursor_type = "row"
-        except Exception:
+        except (AttributeError, RuntimeError) as e:
+            log(f"Failed to set table properties: {e}")
             pass
         self._scan_and_populate()
 
@@ -123,13 +126,15 @@ class CompareScreen(Screen):
         try:
             if self.new_folder_path and os.path.isdir(self.new_folder_path):
                 self._observer_new, self._stop_new = start_observer(self.new_folder_path, trigger_refresh)
-        except Exception:
+        except (OSError, IOError, RuntimeError) as e:
+            log(f"Failed to start file watcher for new folder {self.new_folder_path}: {e}")
             self._observer_new = None
             self._stop_new = None
         try:
             if self.old_folder_path and os.path.isdir(self.old_folder_path):
                 self._observer_old, self._stop_old = start_observer(self.old_folder_path, trigger_refresh)
-        except Exception:
+        except (OSError, IOError, RuntimeError) as e:
+            log(f"Failed to start file watcher for old folder {self.old_folder_path}: {e}")
             self._observer_old = None
             self._stop_old = None
 
@@ -141,13 +146,15 @@ class CompareScreen(Screen):
             stop_new = getattr(self, "_stop_new", None)
             if callable(stop_new):
                 stop_new()
-        except Exception:
+        except (AttributeError, RuntimeError) as e:
+            log(f"Failed to stop new folder watcher: {e}")
             pass
         try:
             stop_old = getattr(self, "_stop_old", None)
             if callable(stop_old):
                 stop_old()
-        except Exception:
+        except (AttributeError, RuntimeError) as e:
+            log(f"Failed to stop old folder watcher: {e}")
             pass
         # Fallback: legacy observer stop if present
         for obs in (getattr(self, "_observer_new", None), getattr(self, "_observer_old", None)):
@@ -155,7 +162,8 @@ class CompareScreen(Screen):
                 if obs:
                     obs.stop()
                     obs.join(timeout=0.5)
-            except Exception:
+            except (AttributeError, RuntimeError) as e:
+                log(f"Failed to stop observer {obs}: {e}")
                 pass
         self._observer_new = None
         self._observer_old = None
@@ -166,7 +174,8 @@ class CompareScreen(Screen):
         """Return to the previous screen."""
         try:
             self.app.pop_screen()
-        except Exception:
+        except (AttributeError, RuntimeError) as e:
+            log(f"Failed to go back to previous screen: {e}")
             pass
 
     def _scan_and_populate(self):
@@ -180,7 +189,16 @@ class CompareScreen(Screen):
         table = self._table
         if not table:
             return
-        # Capture current selection key to restore after rebuild
+        
+        prev_key = self._capture_current_selection(table)
+        self._clear_table(table)
+        display_pairs = self._process_and_add_pairs(table, pairs)
+        self._display_pairs = display_pairs
+        if display_pairs:
+            self._restore_selection_and_focus(table, display_pairs, prev_key)
+
+    def _capture_current_selection(self, table) -> tuple[str, str, str] | None:
+        """Capture the current table selection for restoration after rebuild."""
         prev_key = None
         try:
             coord = table.cursor_coordinate
@@ -190,70 +208,100 @@ class CompareScreen(Screen):
                     cur_pair = self._display_pairs[row_index]
                     if cur_pair:
                         prev_key = (cur_pair.new_path, cur_pair.old_path, cur_pair.kind)
-        except Exception:
+        except (AttributeError, IndexError, ValueError) as e:
+            log(f"Failed to capture current table selection: {e}")
             prev_key = None
+        return prev_key
+
+    def _clear_table(self, table):
+        """Clear the comparison table."""
         try:
             table.clear()
-        except Exception:
+        except (AttributeError, RuntimeError) as e:
+            log(f"Failed to clear comparison table: {e}")
             pass
 
-        def type_style(kind: str) -> str:
-            kind_upper = (kind or "").upper()
-            if kind_upper == "DIFF":
-                return "bold yellow"
-            if kind_upper == "SAME":
-                return "bold green"
-            return "bold white"
-
+    def _process_and_add_pairs(self, table, pairs) -> list[Pair]:
+        """Process pairs, add rows to table with styling and filtering."""
         display_pairs = []
         for p in pairs:
             cmd_text = Text(p.command, style="bold")
-            type_text = Text(p.kind, style=type_style(p.kind), justify="center")
+            type_text = Text(p.kind, style=self._type_style(p.kind), justify="center")
+            
             # Compute change by comparing file contents (excluding header line)
             try:
                 changed = self._pair_changed(p)
-            except Exception:
+            except (OSError, IOError, UnicodeError) as e:
+                log(f"Failed to determine if files changed for pair {p.command}: {e}")
                 changed = False
+            
             # Filter when 'changes only' is enabled
             if self._changes_only and not changed:
                 continue
+                
             # Use symbols: ✓ for changed, ✗ for no change
             chg_text = Text(
-                "✓" if changed else "✗", style=("bold green" if changed else "bold orange1"), justify="center"
+                "✓" if changed else "✗", 
+                style=("bold green" if changed else "bold orange1"), 
+                justify="center"
             )
             sep1 = Text("│", style="dim")
             sep2 = Text("│", style="dim")
-            # TYPE | sep1 | Change | sep2 | Command
+            
+            # Add row to table
             row_key = (p.new_path, p.old_path, p.kind)
-            try:
-                table.add_row(type_text, sep1, chg_text, sep2, cmd_text, key=row_key)  # type: ignore[call-arg]
-            except Exception:
-                table.add_row(type_text, sep1, chg_text, sep2, cmd_text)
+            self._add_table_row(table, type_text, sep1, chg_text, sep2, cmd_text, row_key)
             display_pairs.append(p)
-        # Save display mapping used by selection and open
-        self._display_pairs = display_pairs
-        if display_pairs:
-            try:
-                # Restore selection by key when possible
-                target_row = 0
-                if prev_key is not None:
-                    try:
-                        get_row_index = getattr(table, 'get_row_index', None)
-                        if callable(get_row_index):
-                            idx = get_row_index(prev_key)
-                            if isinstance(idx, int) and 0 <= idx < len(display_pairs):
-                                target_row = idx
-                        else:
-                            for idx, dp in enumerate(display_pairs):
-                                if (dp.new_path, dp.old_path, dp.kind) == prev_key:
-                                    target_row = idx
-                                    break
-                    except Exception:
-                        pass
-                table.move_cursor(row=target_row, column=0)
-                self.set_focus(table)
-            except Exception:
-                pass
+        return display_pairs
+
+    def _type_style(self, kind: str) -> str:
+        """Return the style string for a pair type."""
+        kind_upper = (kind or "").upper()
+        if kind_upper == "DIFF":
+            return "bold yellow"
+        if kind_upper == "SAME":
+            return "bold green"
+        return "bold white"
+
+    def _add_table_row(self, table, type_text, sep1, chg_text, sep2, cmd_text, row_key):
+        """Add a row to the table with fallback error handling."""
+        try:
+            table.add_row(type_text, sep1, chg_text, sep2, cmd_text, key=row_key)  # type: ignore[call-arg]
+        except (AttributeError, ValueError) as e:
+            log(f"Failed to add row with key to table: {e}")
+            table.add_row(type_text, sep1, chg_text, sep2, cmd_text)
+
+    def _restore_selection_and_focus(self, table, display_pairs, prev_key):
+        """Restore the previous selection and set focus to the table."""
+        try:
+            # Restore selection by key when possible
+            target_row = 0
+            if prev_key is not None:
+                target_row = self._find_target_row(table, display_pairs, prev_key)
+            table.move_cursor(row=target_row, column=0)
+            self.set_focus(table)
+        except (AttributeError, ValueError, IndexError) as e:
+            log(f"Failed to set table cursor position: {e}")
+            pass
+
+    def _find_target_row(self, table, display_pairs, prev_key) -> int:
+        """Find the target row index to restore selection to."""
+        target_row = 0
+        try:
+            get_row_index = getattr(table, 'get_row_index', None)
+            if callable(get_row_index):
+                idx = get_row_index(prev_key)
+                if isinstance(idx, int) and 0 <= idx < len(display_pairs):
+                    target_row = idx
+            else:
+                for idx, dp in enumerate(display_pairs):
+                    if (dp.new_path, dp.old_path, dp.kind) == prev_key:
+                        target_row = idx
+                        break
+        except (AttributeError, ValueError, IndexError) as e:
+            log(f"Failed to restore table selection: {e}")
+            pass
+        return target_row
 
     # Note: filenames are intentionally not shown in the table per request.
 
@@ -274,7 +322,8 @@ class CompareScreen(Screen):
             la = self._read_content_lines(a)
             lb = self._read_content_lines(b)
             return la != lb
-        except Exception:
+        except (OSError, IOError, UnicodeError, ValueError) as e:
+            log(f"Failed to compare files {a} and {b}: {e}")
             return False
 
     def _read_content_lines(self, file_path: str) -> list[str]:
@@ -313,7 +362,8 @@ class CompareScreen(Screen):
     def _safe_mtime(self, path: str) -> float:
         try:
             return os.path.getmtime(path)
-        except Exception:
+        except (OSError, IOError) as e:
+            log(f"Failed to get mtime for {path}: {e}")
             return 0.0
 
     def _scan_folder(self, base: str | None) -> dict[str, list[str]]:
@@ -355,87 +405,108 @@ class CompareScreen(Screen):
             if self._footer:
                 self._footer.update(Text.from_markup(self._footer_text()))
             self._scan_and_populate()
-        except Exception:
+        except (AttributeError, RuntimeError) as e:
+            log(f"Failed to toggle changes only filter: {e}")
             pass
 
     def on_key(self, event):
+        """Handle keyboard events for table navigation and selection."""
         table = self._table
         key = getattr(event, 'key', None)
         if not table or key is None:
             return
 
         if key == 'enter':
-            try:
-                if self.screen.focused == table:
-                    event.stop()
-                    self._open_selected_pair()
-                    return
-            except Exception:
-                pass
+            self._handle_enter_key(event, table)
             return
 
         if key in ('j', 'k', 'g', 'G'):
-            try:
-                self.set_focus(table)
-            except Exception:
-                pass
-            try:
+            self._setup_navigation(event, table)
+            self._handle_navigation_keys(key, table)
+
+    def _handle_enter_key(self, event, table):
+        """Handle enter key for opening the selected comparison pair."""
+        try:
+            if self.screen.focused == table:
                 event.stop()
-            except Exception:
-                pass
+                self._open_selected_pair()
+        except (AttributeError, RuntimeError) as e:
+            log(f"Failed to handle enter key for table selection: {e}")
+            pass
 
-            def get_pos():
-                cur = 0
-                try:
-                    coord = table.cursor_coordinate
-                    if coord is not None:
-                        cur = getattr(coord, 'row', 0)
-                except Exception:
-                    pass
-                try:
-                    total = getattr(table, 'row_count', None)
-                    if total is None:
-                        total = len(getattr(table, 'rows', []))
-                except Exception:
-                    total = 0
-                return cur, total
+    def _setup_navigation(self, event, table):
+        """Set focus to table and stop event propagation for navigation keys."""
+        try:
+            self.set_focus(table)
+        except (AttributeError, RuntimeError) as e:
+            log(f"Failed to set focus to table: {e}")
+            pass
+        try:
+            event.stop()
+        except (AttributeError, RuntimeError) as e:
+            log(f"Failed to stop key event: {e}")
+            pass
 
-            def set_row(r):
-                try:
-                    table.move_cursor(row=r, column=0)
-                    scroll_to_row = getattr(table, 'scroll_to_row', None)
-                    if callable(scroll_to_row):
-                        scroll_to_row(r)
-                    else:
-                        scroll_to_cursor = getattr(table, 'scroll_to_cursor', None)
-                        if callable(scroll_to_cursor):
-                            scroll_to_cursor()
-                except Exception:
-                    pass
-
-            if key == 'j':
-                cur, total = get_pos()
-                if total:
-                    set_row(min(cur + 1, total - 1))
+    def _handle_navigation_keys(self, key: str, table):
+        """Handle vim-style navigation keys (j, k, g, G)."""
+        cur, total = self._get_cursor_position(table)
+        
+        if key == 'j':
+            if total:
+                self._set_cursor_position(table, min(cur + 1, total - 1))
+            self._last_g = False
+        elif key == 'k':
+            if total:
+                self._set_cursor_position(table, max(cur - 1, 0))
+            self._last_g = False
+        elif key == 'G':
+            if total:
+                self._set_cursor_position(table, total - 1)
+            self._last_g = False
+        elif key == 'g':
+            if self._last_g:
+                self._set_cursor_position(table, 0)
                 self._last_g = False
-            elif key == 'k':
-                cur, total = get_pos()
-                if total:
-                    set_row(max(cur - 1, 0))
-                self._last_g = False
-            elif key == 'G':
-                _cur, total = get_pos()
-                if total:
-                    set_row(total - 1)
-                self._last_g = False
-            elif key == 'g':
-                if self._last_g:
-                    set_row(0)
-                    self._last_g = False
-                else:
-                    self._last_g = True
             else:
-                self._last_g = False
+                self._last_g = True
+        else:
+            self._last_g = False
+
+    def _get_cursor_position(self, table) -> tuple[int, int]:
+        """Get current cursor position and total row count."""
+        cur = 0
+        try:
+            coord = table.cursor_coordinate
+            if coord is not None:
+                cur = getattr(coord, 'row', 0)
+        except (AttributeError, ValueError) as e:
+            log(f"Failed to get table cursor position: {e}")
+            pass
+            
+        total = 0
+        try:
+            total = getattr(table, 'row_count', None)
+            if total is None:
+                total = len(getattr(table, 'rows', []))
+        except (AttributeError, ValueError) as e:
+            log(f"Failed to get table row count: {e}")
+            total = 0
+        return cur, total
+
+    def _set_cursor_position(self, table, row: int):
+        """Set cursor position with proper scrolling."""
+        try:
+            table.move_cursor(row=row, column=0)
+            scroll_to_row = getattr(table, 'scroll_to_row', None)
+            if callable(scroll_to_row):
+                scroll_to_row(row)
+            else:
+                scroll_to_cursor = getattr(table, 'scroll_to_cursor', None)
+                if callable(scroll_to_cursor):
+                    scroll_to_cursor()
+        except (AttributeError, RuntimeError) as e:
+            log(f"Failed to move table cursor to row {row}: {e}")
+            pass
 
     def _open_selected_pair(self):
         table = self._table
@@ -449,8 +520,6 @@ class CompareScreen(Screen):
             if row_index is None or row_index < 0 or row_index >= len(self._display_pairs):
                 return
             pair = self._display_pairs[row_index]
-            from .diff_viewer import SideBySideDiffScreen
-
             # Navigation context removed; open only the selected pair
             self.app.push_screen(
                 SideBySideDiffScreen(
@@ -459,7 +528,8 @@ class CompareScreen(Screen):
                     keywords_path=self.keywords_path,
                 )
             )
-        except Exception:
+        except (AttributeError, ValueError, IndexError, ImportError) as e:
+            log(f"Failed to open selected comparison pair: {e}")
             pass
 
     # --- Actions for help/discoverability ---
@@ -470,13 +540,15 @@ class CompareScreen(Screen):
         try:
             coord = table.cursor_coordinate
             cur = getattr(coord, 'row', 0) if coord is not None else 0
-        except Exception:
+        except (AttributeError, ValueError) as e:
+            log(f"Failed to get current table cursor position: {e}")
             cur = 0
         try:
             total = getattr(table, 'row_count', None)
             if total is None:
                 total = len(getattr(table, 'rows', []))
-        except Exception:
+        except (AttributeError, ValueError) as e:
+            log(f"Failed to get table row count: {e}")
             total = 0
         if total:
             try:
@@ -488,7 +560,8 @@ class CompareScreen(Screen):
                     scroll_to_cursor = getattr(table, 'scroll_to_cursor', None)
                     if callable(scroll_to_cursor):
                         scroll_to_cursor()
-            except Exception:
+            except (AttributeError, RuntimeError) as e:
+                log(f"Failed to move cursor to next row: {e}")
                 pass
         self._last_g = False
 
@@ -499,14 +572,16 @@ class CompareScreen(Screen):
         try:
             coord = table.cursor_coordinate
             cur = getattr(coord, 'row', 0) if coord is not None else 0
-        except Exception:
+        except (AttributeError, ValueError) as e:
+            log(f"Failed to get current table cursor position: {e}")
             cur = 0
         try:
             # row_count may not exist on older versions; fallback to rows length
             total = getattr(table, 'row_count', None)
             if total is None:
                 total = len(getattr(table, 'rows', []))
-        except Exception:
+        except (AttributeError, ValueError) as e:
+            log(f"Failed to get table row count: {e}")
             total = 0
         if total:
             try:
@@ -518,7 +593,8 @@ class CompareScreen(Screen):
                     scroll_to_cursor = getattr(table, 'scroll_to_cursor', None)
                     if callable(scroll_to_cursor):
                         scroll_to_cursor()
-            except Exception:
+            except (AttributeError, RuntimeError) as e:
+                log(f"Failed to move cursor to previous row: {e}")
                 pass
         self._last_g = False
 
@@ -530,7 +606,8 @@ class CompareScreen(Screen):
             total = getattr(table, 'row_count', None)
             if total is None:
                 total = len(getattr(table, 'rows', []))
-        except Exception:
+        except (AttributeError, ValueError) as e:
+            log(f"Failed to get table row count: {e}")
             total = 0
         if total:
             try:
@@ -542,6 +619,7 @@ class CompareScreen(Screen):
                     scroll_to_cursor = getattr(table, 'scroll_to_cursor', None)
                     if callable(scroll_to_cursor):
                         scroll_to_cursor()
-            except Exception:
+            except (AttributeError, RuntimeError) as e:
+                log(f"Failed to move cursor to end row: {e}")
                 pass
         self._last_g = False

@@ -21,7 +21,8 @@ class _DebouncedHandler(FileSystemEventHandler):
         def fire() -> None:
             try:
                 self._callback()
-            except Exception:
+            except (RuntimeError, OSError) as e:
+                log(f"[WATCHDOG] Callback failed: {e}")
                 pass
 
         with self._lock:
@@ -36,7 +37,8 @@ class _DebouncedHandler(FileSystemEventHandler):
             if self._timer is not None:
                 try:
                     self._timer.cancel()
-                except Exception:
+                except (RuntimeError, OSError) as e:
+                    log(f"[WATCHDOG] Timer cancel failed: {e}")
                     pass
                 self._timer = None
 
@@ -48,7 +50,8 @@ class _DebouncedHandler(FileSystemEventHandler):
             return
         try:
             log("[WATCHDOG] Event:", et, "on", getattr(event, "src_path", ""))
-        except Exception:
+        except (OSError, RuntimeError) as e:
+            log(f"[WATCHDOG] Event logging failed: {e}")
             pass
         self._schedule()
 
@@ -79,15 +82,18 @@ def start_observer(
             _stopped = True
         try:
             handler.cancel()
-        except Exception:
+        except (RuntimeError, OSError) as e:
+            log(f"[WATCHDOG] Handler cancel failed: {e}")
             pass
         try:
             observer.stop()
-        except Exception:
+        except (RuntimeError, OSError) as e:
+            log(f"[WATCHDOG] Observer stop failed: {e}")
             pass
         try:
             observer.join(timeout=0.5)
-        except Exception:
+        except (RuntimeError, OSError) as e:
+            log(f"[WATCHDOG] Observer join failed: {e}")
             pass
 
     return observer, stop

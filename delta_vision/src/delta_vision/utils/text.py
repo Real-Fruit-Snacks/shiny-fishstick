@@ -3,6 +3,8 @@ from __future__ import annotations
 import re
 from typing import Iterable, Pattern
 
+from delta_vision.utils.logger import log
+
 
 def make_keyword_pattern(
     keywords: Iterable[str],
@@ -21,7 +23,8 @@ def make_keyword_pattern(
     """
     try:
         words = [w for w in set(k.strip() for k in keywords or []) if w]
-    except Exception:
+    except (ValueError, TypeError, AttributeError) as e:
+        log(f"[TEXT] Failed to process keywords: {e}")
         words = []
     if not words:
         return None
@@ -40,5 +43,6 @@ def make_keyword_pattern(
         # Fallback to a safe literal OR pattern
         try:
             return re.compile(core, flags)
-        except Exception:
+        except (re.error, ValueError, RuntimeError) as e:
+            log(f"[TEXT] Failed to compile fallback regex pattern: {e}")
             return None

@@ -14,8 +14,6 @@ from __future__ import annotations
 
 import os
 import re
-from dataclasses import dataclass
-from time import perf_counter
 
 from rich.text import Text
 from textual.app import ComposeResult
@@ -23,20 +21,18 @@ from textual.containers import Horizontal, Vertical
 from textual.screen import Screen
 from textual.widgets import Button, DataTable, Input, Static
 
-from delta_vision.utils.io import read_text
+from delta_vision.utils.logger import log
+from delta_vision.utils.search_engine import (
+    SearchConfig,
+    SearchEngine,
+    SearchMatch,
+    count_matches_by_type,
+    validate_folders,
+)
 from delta_vision.widgets.footer import Footer
 from delta_vision.widgets.header import Header
 
 from .file_viewer import FileViewerScreen
-
-
-@dataclass
-class Match:
-    file_path: str
-    line_no: int
-    line: str
-    cmd: str | None = None
-    is_error: bool = False
 
 
 class SearchScreen(Screen):
@@ -78,21 +74,22 @@ class SearchScreen(Screen):
         self._last_g = False
         # Keep last search results to resolve row -> file mapping
         self._last_results = []
-        # Map table row index -> Match (or None for visual separator rows)
+        # Map table row index -> SearchMatch (or None for visual separator rows)
         self._row_map = []
         # Debounce + caps
         self._debounce_timer = None
         self._debounce_delay = 0.3  # seconds
-        self._max_files = 5000
-        self._max_preview_chars = 200  # cap preview length, centered on first match
+
+        # Search engine configuration
+        self._search_config = SearchConfig(max_files=5000, max_preview_chars=200)
+        self._search_engine = SearchEngine(self._search_config)
 
     def compose(self) -> ComposeResult:
         """Build the static UI: header, toolbar, and results table."""
         yield Header(page_name="Search", show_clock=True)
         with Vertical(id="search-root"):
             with Horizontal(id="search-bar"):
-                self._input = Input(
-                    placeholder="Type to search…", id="search-input")
+                self._input = Input(placeholder="Type to search…", id="search-input")
                 yield self._input
                 yield Button("Search", id="search-btn", variant="primary")
                 # Clickable toggle for regex mode
@@ -108,26 +105,18 @@ class SearchScreen(Screen):
                 self._table = DataTable(id="results-table")
                 # Define columns with thin separators for a crisp grid look
                 self._table.add_column(Text("Source"), key="source")
-                self._table.add_column(
-                    Text("│", style="dim", justify="center"), key="sep1", width=1)
-                self._table.add_column(
-                    Text("Line", justify="center"), key="line", width=6)
-                self._table.add_column(
-                    Text("│", style="dim", justify="center"), key="sep2", width=1)
+                self._table.add_column(Text("│", style="dim", justify="center"), key="sep1", width=1)
+                self._table.add_column(Text("Line", justify="center"), key="line", width=6)
+                self._table.add_column(Text("│", style="dim", justify="center"), key="sep2", width=1)
                 self._table.add_column(Text("Preview"), key="preview")
                 yield self._table
         # Footer with hotkeys and regex toggle indicator
-        self._footer = Footer(text=self._footer_text(),
-                              classes="footer-search")
+        self._footer = Footer(text=self._footer_text(), classes="footer-search")
         yield self._footer
 
     def _footer_text(self) -> str:
         state = "ON" if self._regex_enabled else "OFF"
-        return (
-            " [orange1]q[/orange1] Back    "
-            "[orange1]Enter[/orange1] Search    "
-            f"[orange1]r[/orange1] Regex: {state}"
-        )
+        return f" [orange1]q[/orange1] Back    [orange1]Enter[/orange1] Search    [orange1]r[/orange1] Regex: {state}"
 
     def _regex_button_label(self) -> str:
         return f"Regex: {'ON' if self._regex_enabled else 'OFF'}"
@@ -148,16 +137,19 @@ class SearchScreen(Screen):
                 if hasattr(self._table, "cursor_type"):
                     try:
                         self._table.cursor_type = "row"
-                    except Exception:
+                    except (AttributeError, RuntimeError) as e:
+                        log(f"Failed to set table cursor type: {e}")
                         pass
-        except Exception:
+        except (AttributeError, RuntimeError) as e:
+            log(f"Failed to apply table polish: {e}")
             pass
 
     def action_go_home(self):
         """Return to the previous screen (Home)."""
         try:
             self.app.pop_screen()
-        except Exception:
+        except (AttributeError, RuntimeError) as e:
+            log(f"Failed to go home: {e}")
             pass
 
     def action_do_search(self):
@@ -179,7 +171,8 @@ class SearchScreen(Screen):
                     self._regex_button.variant = "success"
                 else:
                     self._regex_button.variant = "warning"
-        except Exception:
+        except (AttributeError, RuntimeError) as e:
+            log(f"Failed to update footer/button in regex toggle: {e}")
             pass
         # Re-run search if there's a query
         query = (self._input.value if self._input else "").strip()
@@ -208,7 +201,8 @@ class SearchScreen(Screen):
             if self._debounce_timer is not None:
                 self._debounce_timer.stop()
                 self._debounce_timer = None
-        except Exception:
+        except (AttributeError, RuntimeError) as e:
+            log(f"Failed to stop debounce timer: {e}")
             pass
         value = (event.value or '').strip()
         if not value:
@@ -218,14 +212,16 @@ class SearchScreen(Screen):
                     self._table.clear()
                 summary = self.query_one('#results-summary', Static)
                 summary.update("Type a query and press Enter to search.")
-            except Exception:
+            except (AttributeError, RuntimeError) as e:
+                log(f"Failed to clear table and update summary: {e}")
                 pass
             return
         # With non-empty input, just update the hint; do not run a search yet
         try:
             summary = self.query_one('#results-summary', Static)
             summary.update("Press Enter to search.")
-        except Exception:
+        except (AttributeError, RuntimeError) as e:
+            log(f"Failed to update search hint: {e}")
             pass
 
     def on_data_table_row_selected(self, event):  # DataTable.RowSelected
@@ -234,7 +230,8 @@ class SearchScreen(Screen):
         try:
             if self._table:
                 self.set_focus(self._table)
-        except Exception:
+        except (AttributeError, RuntimeError) as e:
+            log(f"Failed to set focus on table after row selection: {e}")
             pass
 
     def _open_selected_row(self):
@@ -255,105 +252,158 @@ class SearchScreen(Screen):
             if match is None or getattr(match, 'is_error', False):
                 return
             # Push viewer screen
-            viewer = FileViewerScreen(
-                match.file_path, match.line_no, keywords_path=self.keywords_path)
+            viewer = FileViewerScreen(match.file_path, match.line_no, keywords_path=self.keywords_path)
             self.app.push_screen(viewer)
-        except Exception:
+        except (AttributeError, ValueError, IndexError) as e:
+            log(f"Failed to open selected row: {e}")
             pass
 
     def on_key(self, event):
-        # Vim-like navigation for results table and Enter-to-open behavior
+        """Handle keyboard navigation - orchestrator for keyboard events."""
         table = self._table
         key = getattr(event, 'key', None)
         if not table or key is None:
             return
 
-        # Enter on table opens viewer; let Enter bubble if focus is not on table
+        # Handle Enter key to open selected row
         if key == 'enter':
-            try:
-                if self.screen.focused == table:
-                    event.stop()
-                    self._open_selected_row()
-                    return
-            except Exception:
-                pass
+            self._handle_enter_key(event, table)
             return
 
+        # Handle vim-like navigation
         if key in ('j', 'k', 'g', 'G'):
-            # Move focus to table for vim-like navigation and stop propagation
-            try:
-                self.set_focus(table)
-            except Exception:
-                pass
-            try:
+            self._handle_vim_navigation(event, key, table)
+
+    def _handle_enter_key(self, event, table):
+        """Handle Enter key press to open selected row."""
+        try:
+            if self.screen.focused == table:
                 event.stop()
-            except Exception:
-                pass
+                self._open_selected_row()
+        except (AttributeError, RuntimeError) as e:
+            log(f"Failed to handle Enter key on table: {e}")
 
-            # Helpers scoped here
-            def get_pos():
-                cur = 0
-                try:
-                    coord = table.cursor_coordinate
-                    if coord is not None:
-                        cur = getattr(coord, 'row', 0)
-                except Exception:
-                    pass
-                try:
-                    total = getattr(table, 'row_count', None)
-                    if total is None:
-                        total = len(getattr(table, 'rows', []))
-                except Exception:
-                    total = 0
-                return cur, total
+    def _handle_vim_navigation(self, event, key: str, table):
+        """Handle vim-style navigation keys (j, k, g, G)."""
+        # Move focus to table and stop event propagation
+        self._prepare_table_for_navigation(table)
 
-            def set_row(r):
-                try:
-                    table.move_cursor(row=r, column=0)
-                    try:
-                        scroll_to_row = getattr(table, 'scroll_to_row', None)
-                        if callable(scroll_to_row):
-                            scroll_to_row(r)
-                        else:
-                            scroll_to_cursor = getattr(
-                                table, 'scroll_to_cursor', None)
-                            if callable(scroll_to_cursor):
-                                scroll_to_cursor()
-                    except Exception:
-                        pass
-                except Exception:
-                    pass
+        try:
+            event.stop()
+        except (AttributeError, RuntimeError) as e:
+            log(f"Failed to stop key event: {e}")
 
-            if key == 'j':
-                cur, total = get_pos()
-                if total:
-                    set_row(min(cur + 1, total - 1))
-                self._last_g = False
-            elif key == 'k':
-                cur, total = get_pos()
-                if total:
-                    set_row(max(cur - 1, 0))
-                self._last_g = False
-            elif key == 'G':
-                _cur, total = get_pos()
-                if total:
-                    set_row(total - 1)
-                self._last_g = False
-            elif key == 'g':
-                if self._last_g:
-                    set_row(0)
-                    self._last_g = False
-                else:
-                    self._last_g = True
+        # Dispatch to specific vim key handler
+        if key == 'j':
+            self._handle_vim_j_key(table)
+        elif key == 'k':
+            self._handle_vim_k_key(table)
+        elif key == 'G':
+            self._handle_vim_G_key(table)
+        elif key == 'g':
+            self._handle_vim_g_key(table)
+
+    def _prepare_table_for_navigation(self, table):
+        """Prepare table for navigation by setting focus."""
+        try:
+            self.set_focus(table)
+        except (AttributeError, RuntimeError) as e:
+            log(f"Failed to set focus for vim navigation: {e}")
+
+    def _handle_vim_j_key(self, table):
+        """Move cursor down one row (vim j key)."""
+        cur, total = self._get_table_position(table)
+        if total:
+            self._set_table_row(table, min(cur + 1, total - 1))
+        self._last_g = False
+
+    def _handle_vim_k_key(self, table):
+        """Move cursor up one row (vim k key)."""
+        cur, total = self._get_table_position(table)
+        if total:
+            self._set_table_row(table, max(cur - 1, 0))
+        self._last_g = False
+
+    def _handle_vim_G_key(self, table):
+        """Move cursor to last row (vim G key)."""
+        _cur, total = self._get_table_position(table)
+        if total:
+            self._set_table_row(table, total - 1)
+        self._last_g = False
+
+    def _handle_vim_g_key(self, table):
+        """Handle vim g key (gg to go to first row)."""
+        if self._last_g:
+            self._set_table_row(table, 0)
+            self._last_g = False
+        else:
+            self._last_g = True
+
+    def _get_table_position(self, table) -> tuple[int, int]:
+        """Get current cursor position and total row count from table."""
+        cur = 0
+        try:
+            coord = table.cursor_coordinate
+            if coord is not None:
+                cur = getattr(coord, 'row', 0)
+        except (AttributeError, ValueError) as e:
+            log(f"Failed to get table cursor position: {e}")
+
+        try:
+            total = getattr(table, 'row_count', None)
+            if total is None:
+                total = len(getattr(table, 'rows', []))
+        except (AttributeError, ValueError) as e:
+            log(f"Failed to get table row count: {e}")
+            total = 0
+
+        return cur, total
+
+    def _set_table_row(self, table, row: int):
+        """Set table cursor to specific row and scroll to it."""
+        try:
+            table.move_cursor(row=row, column=0)
+            self._scroll_table_to_row(table, row)
+        except (AttributeError, RuntimeError) as e:
+            log(f"Failed to set table row position: {e}")
+
+    def _scroll_table_to_row(self, table, row: int):
+        """Scroll table to make specified row visible."""
+        try:
+            scroll_to_row = getattr(table, 'scroll_to_row', None)
+            if callable(scroll_to_row):
+                scroll_to_row(row)
             else:
-                self._last_g = False
+                scroll_to_cursor = getattr(table, 'scroll_to_cursor', None)
+                if callable(scroll_to_cursor):
+                    scroll_to_cursor()
+        except (AttributeError, RuntimeError) as e:
+            log(f"Failed to scroll table to row: {e}")
 
     # --- Search logic ---
     def run_search(self, query: str):
+        """Main search entry point - orchestrates the entire search process."""
         if not self._table:
             return
-        # Capture current selection key to restore after rebuild
-        prev_key: str | None = None
+
+        prev_key = self._capture_current_selection()
+        self._clear_results()
+
+        if not query:
+            return
+
+        folders = self._get_search_folders()
+        search_result = self._perform_search(query, folders)
+        if search_result is None:
+            return  # Error already shown in summary
+
+        matches, files_scanned, elapsed = search_result
+        self._update_search_summary(matches, query, elapsed, files_scanned)
+        self._populate_results_table(matches, folders)
+        self._restore_selection_and_focus(matches, prev_key)
+
+    def _capture_current_selection(self) -> str | None:
+        """Capture current table selection key for restoration after rebuild."""
         try:
             coord = self._table.cursor_coordinate
             if coord is not None:
@@ -361,113 +411,53 @@ class SearchScreen(Screen):
                 if row_index is not None and 0 <= row_index < len(self._row_map):
                     cur_match = self._row_map[row_index]
                     if cur_match is not None:
-                        prev_key = f"{cur_match.file_path}:{cur_match.line_no}"
-        except Exception:
-            prev_key = None
+                        return f"{cur_match.file_path}:{cur_match.line_no}"
+        except (AttributeError, ValueError, IndexError) as e:
+            log(f"Failed to capture current selection: {e}")
+        return None
+
+    def _clear_results(self):
+        """Clear the results table and reset internal state."""
         try:
             self._table.clear()
-        except Exception:
-            pass
+        except (AttributeError, RuntimeError) as e:
+            log(f"Failed to clear table: {e}")
         self._row_map = []
-        if not query:
-            return
 
-        # Aggregate folders to search; only existing directories
-        folders: list[str] = []
-        for p in [self.new_folder_path, self.old_folder_path]:
-            if p and os.path.isdir(p):
-                folders.append(p)
+    def _get_search_folders(self) -> list[str]:
+        """Get list of valid folders to search."""
+        candidate_folders = [self.new_folder_path, self.old_folder_path]
+        return validate_folders([f for f in candidate_folders if f])
 
-        # Build pattern depending on regex mode
-        try:
-            if self._regex_enabled:
-                # egrep-like: treat query as a regex (approximate with Python re)
-                pattern = re.compile(query, re.IGNORECASE)
-            else:
-                # Substring search when regex is off
-                pattern = re.compile(re.escape(query), re.IGNORECASE)
-        except re.error as e:
-            # Invalid regex: show message in summary and stop
-            try:
-                summary = self.query_one('#results-summary', Static)
-                summary.update(f"[Invalid regex: {e}]")
-            except Exception:
-                pass
-            return
-
-        matches: list[Match] = []
-        files_scanned: int = 0
-        start_time = perf_counter()
-        stop_scan = False
-        for folder in folders:
-            try:
-                for root, _dirs, files in os.walk(folder):
-                    if stop_scan:
-                        break
-                    for name in files:
-                        file_path = os.path.join(root, name)
-                        if not os.path.isfile(file_path):
-                            continue
-                        files_scanned += 1
-                        if files_scanned > self._max_files:
-                            stop_scan = True
-                            break
-                        # Centralized multi-encoding read
-                        text, _enc = read_text(file_path)
-                        # Extract command from first line if present (in quotes)
-                        cmd_str: str | None = None
-                        try:
-                            if text:
-                                first = text.splitlines()[0]
-                                mcmd = re.search(r'"([^"]+)"', first)
-                                cmd_str = mcmd.group(
-                                    1) if mcmd else first.strip()
-                        except Exception:
-                            cmd_str = None
-                        # Skip empty files entirely - they shouldn't appear in search results
-                        if not text:
-                            continue
-                        for idx, line in enumerate(text.splitlines(), start=1):
-                            mobj = pattern.search(line)
-                            if mobj:
-                                original = line.rstrip("\n")
-                                preview = original
-                                if len(original) > self._max_preview_chars:
-                                    # Center preview around first match span
-                                    span_start, span_end = mobj.span()
-                                    center = (span_start + span_end) // 2
-                                    half = self._max_preview_chars // 2
-                                    start = max(0, center - half)
-                                    end = start + self._max_preview_chars
-                                    if end > len(original):
-                                        end = len(original)
-                                        start = max(
-                                            0, end - self._max_preview_chars)
-                                    snippet = original[start:end]
-                                    prefix = "…" if start > 0 else ""
-                                    suffix = "…" if end < len(original) else ""
-                                    preview = f"{prefix}{snippet}{suffix}"
-                                matches.append(
-                                    Match(file_path, idx, preview, cmd_str))
-                    if stop_scan:
-                        break
-            except Exception as e:
-                # Add a row indicating folder error
-                matches.append(
-                    Match(folder, 0, f"[Error reading folder: {e}]", None, True))
-        elapsed = perf_counter() - start_time
-
-        # Sort by path then line number for determinism
-        matches.sort(key=lambda m: (m.file_path.lower(), m.line_no))
-
-        # Update summary with match count, error count, files scanned, and duration
+    def _show_regex_error(self, error_msg: str):
+        """Show regex compilation error in summary."""
         try:
             summary = self.query_one('#results-summary', Static)
-            capped_note = " (capped)" if files_scanned > self._max_files else ""
-            match_count = sum(
-                1 for _m in matches if not _m.is_error and _m.line_no > 0)
-            error_count = sum(1 for _m in matches if _m.is_error)
+            summary.update(f"[Invalid regex: {error_msg}]")
+        except (AttributeError, RuntimeError) as e:
+            log(f"Failed to update regex error summary: {e}")
+
+    def _perform_search(self, query: str, folders: list[str]) -> tuple[list[SearchMatch], int, float] | None:
+        """Perform the actual search using the search engine."""
+        try:
+            return self._search_engine.search_folders(query, folders, self._regex_enabled)
+        except Exception as e:
+            # Check if it's a regex error
+            if "regex" in str(e).lower() or "pattern" in str(e).lower():
+                self._show_regex_error(str(e))
+                return None
+            else:
+                log(f"Search failed: {e}")
+                return [], 0, 0.0
+
+    def _update_search_summary(self, matches: list[SearchMatch], query: str, elapsed: float, files_scanned: int):
+        """Update the search summary display with results."""
+        try:
+            summary = self.query_one('#results-summary', Static)
+            capped_note = " (capped)" if files_scanned > self._search_config.max_files else ""
+            match_count, error_count = count_matches_by_type(matches)
             err_fragment = f"; [red]{error_count}[/red] error(s)" if error_count else ""
+
             summary.update(
                 Text.from_markup(
                     f"Found [bold]{match_count}[/bold] match(es) across "
@@ -475,107 +465,153 @@ class SearchScreen(Screen):
                     f"in [bold]{elapsed:.3f}s[/bold] for: '[magenta]{query}[/magenta]'"
                 )
             )
-        except Exception:
-            pass
+        except (AttributeError, RuntimeError) as e:
+            log(f"Failed to update search summary: {e}")
 
-        # Compute hits per file for display
-        hits_per_file: dict[str, int] = {}
+    def _populate_results_table(self, matches: list[SearchMatch], folders: list[str]):
+        """Populate the results table with formatted match data."""
+        if not matches:
+            return
+
+        hits_per_file = self._compute_hits_per_file(matches)
+
+        for m in matches:
+            src_text, line_text, preview_text = self._format_table_row(m, folders, hits_per_file)
+            sep = Text("│", style="dim", justify="center")
+            row_key = f"{m.file_path}:{m.line_no}"
+
+            try:
+                self._table.add_row(src_text, sep, line_text, sep, preview_text, key=row_key)
+            except (AttributeError, RuntimeError) as e:
+                log(f"Failed to add row with key: {e}")
+                self._table.add_row(src_text, sep, line_text, sep, preview_text)
+            self._row_map.append(m)
+
+        self._last_results = matches
+
+    def _compute_hits_per_file(self, matches: list[SearchMatch]) -> dict[str, int]:
+        """Compute the number of hits per file for display purposes."""
+        hits_per_file = {}
         for m in matches:
             if m.file_path not in hits_per_file:
                 hits_per_file[m.file_path] = 0
             if m.line_no > 0:
                 hits_per_file[m.file_path] += 1
+        return hits_per_file
 
-        # Populate table with source (NEW/OLD) and command from header; style errors distinctly
-        for _i, m in enumerate(matches):
-            src_text: Text | None = None
-            if m.is_error:
-                src_text = Text("[ERR] ", style="bold red")
-                cmd_display = (m.cmd or os.path.basename(m.file_path)).strip()
-                src_text.append(cmd_display, style="red")
-                preview_text = Text(f"⚠ {m.line}", style="red")
-                line_text = Text("-", style="red", justify="center")
+    def _format_table_row(
+        self, match: SearchMatch, folders: list[str], hits_per_file: dict[str, int]
+    ) -> tuple[Text, Text, Text]:
+        """Format a single table row for display."""
+        if match.is_error:
+            return self._format_error_row(match)
+        else:
+            return self._format_match_row(match, folders, hits_per_file)
+
+    def _format_error_row(self, match: SearchMatch) -> tuple[Text, Text, Text]:
+        """Format an error row for display."""
+        src_text = Text("[ERR] ", style="bold red")
+        cmd_display = (match.cmd or os.path.basename(match.file_path)).strip()
+        src_text.append(cmd_display, style="red")
+        preview_text = Text(f"⚠ {match.line}", style="red")
+        line_text = Text("-", style="red", justify="center")
+        return src_text, line_text, preview_text
+
+    def _format_match_row(
+        self, match: SearchMatch, folders: list[str], hits_per_file: dict[str, int]
+    ) -> tuple[Text, Text, Text]:
+        """Format a normal match row for display."""
+        # Determine source label (NEW/OLD)
+        label = ""
+        for base in folders:
+            if match.file_path.startswith(base):
+                label = "NEW" if base == self.new_folder_path else ("OLD" if base == self.old_folder_path else "")
+                break
+
+        # Build source text with label and command
+        if label:
+            label_color = "green" if label == "NEW" else "yellow"
+            src_text = Text(f"[{label}] ", style=f"bold {label_color}")
+        else:
+            src_text = Text("")
+
+        cmd_display = (match.cmd or "").strip()
+        if not cmd_display:
+            cmd_display = os.path.basename(match.file_path)
+        src_text.append(cmd_display, style="white")
+
+        # Add hit count if multiple hits in this file
+        try:
+            count = hits_per_file.get(match.file_path, 0)
+            if count and count > 1:
+                src_text.append(f"  ×{count}", style="dim")
+        except (AttributeError, ValueError) as e:
+            log(f"Failed to append hit count to source text: {e}")
+
+        # Create highlighted preview text
+        preview_text = self._create_highlighted_preview(match.line)
+
+        line_text = Text(str(match.line_no) if match.line_no else "-", justify="center")
+        return src_text, line_text, preview_text
+
+    def _create_highlighted_preview(self, line: str) -> Text:
+        """Create highlighted preview text for search matches."""
+        try:
+            # Recreate the search pattern for highlighting
+            query = self._input.value if self._input else ""
+            if not query:
+                return Text(line)
+
+            if self._regex_enabled:
+                pattern = re.compile(query, re.IGNORECASE)
             else:
-                label = ""
-                for base in folders:
-                    if m.file_path.startswith(base):
-                        label = (
-                            "NEW" if base == self.new_folder_path else (
-                                "OLD" if base == self.old_folder_path else "")
-                        )
-                        break
-                if label:
-                    label_color = "green" if label == "NEW" else "yellow"
-                    src_text = Text(f"[{label}] ", style=f"bold {label_color}")
-                else:
-                    src_text = Text("")
-                # Append the command (or a fallback) with neutral styling
-                cmd_display = (m.cmd or "").strip()
-                if not cmd_display:
-                    cmd_display = os.path.basename(m.file_path)
-                src_text.append(cmd_display, style="white")
-                # If this file has multiple hits, append a dim count indicator
-                try:
-                    count = hits_per_file.get(m.file_path, 0)
-                    if count and count > 1:
-                        src_text.append(f"  ×{count}", style="dim")
-                except Exception:
-                    pass
+                pattern = re.compile(re.escape(query), re.IGNORECASE)
 
-                # Highlight matches in the preview using Rich Text
-                try:
-                    preview_text = Text(m.line)
-                    for match in pattern.finditer(m.line):
-                        start, end = match.span()
-                        preview_text.stylize("bold magenta", start, end)
-                except Exception:
-                    preview_text = Text(m.line)
+            preview_text = Text(line)
+            for match in pattern.finditer(line):
+                start, end = match.span()
+                preview_text.stylize("bold magenta", start, end)
+            return preview_text
+        except (AttributeError, ValueError, re.error) as e:
+            log(f"Failed to highlight matches in preview: {e}")
+            return Text(line)
 
-                line_text = Text(
-                    str(m.line_no) if m.line_no else "-", justify="center")
-            sep = Text("│", style="dim", justify="center")
-            # Assign a stable string row key when supported by Textual
-            row_key = f"{m.file_path}:{m.line_no}"
+    def _restore_selection_and_focus(self, matches: list[SearchMatch], prev_key: str | None):
+        """Restore previous selection and set focus to results table."""
+        if not matches or not self._table:
+            return
+
+        try:
+            target_row = 0
+            if prev_key is not None:
+                target_row = self._find_row_by_key(prev_key)
+
             try:
-                self._table.add_row(src_text, sep, line_text,
-                                    sep, preview_text, key=row_key)
-            except Exception:
-                self._table.add_row(
-                    src_text, sep, line_text, sep, preview_text)
-            self._row_map.append(m)
+                self._table.move_cursor(row=target_row, column=0)
+            except (AttributeError, RuntimeError) as e:
+                log(f"Failed to set table cursor: {e}")
 
-        # Remember results for row mapping
-        self._last_results = matches
+            self.set_focus(self._table)
+        except (AttributeError, RuntimeError) as e:
+            log(f"Failed to focus table after search: {e}")
 
-        # Move focus to results and set initial cursor if we have any matches
-        if matches and self._table:
-            try:
-                # Restore previous selection if possible, else default to first row
-                target_row = 0
-                if prev_key is not None:
-                    try:
-                        # Prefer DataTable API to find row by key if available
-                        get_row_index = getattr(
-                            self._table, 'get_row_index', None)
-                        if callable(get_row_index):
-                            idx = get_row_index(prev_key)
-                            if isinstance(idx, int) and 0 <= idx < len(self._row_map):
-                                target_row = idx
-                        else:
-                            # Fallback: search our row map
-                            for idx, mm in enumerate(self._row_map):
-                                if mm and f"{mm.file_path}:{mm.line_no}" == prev_key:
-                                    target_row = idx
-                                    break
-                    except Exception:
-                        pass
-                try:
-                    self._table.move_cursor(row=target_row, column=0)
-                except Exception:
-                    pass
-                self.set_focus(self._table)
-            except Exception:
-                pass
+    def _find_row_by_key(self, prev_key: str) -> int:
+        """Find the row index matching the given key."""
+        try:
+            # Prefer DataTable API to find row by key if available
+            get_row_index = getattr(self._table, 'get_row_index', None)
+            if callable(get_row_index):
+                idx = get_row_index(prev_key)
+                if isinstance(idx, int) and 0 <= idx < len(self._row_map):
+                    return idx
+            else:
+                # Fallback: search our row map
+                for idx, mm in enumerate(self._row_map):
+                    if mm and f"{mm.file_path}:{mm.line_no}" == prev_key:
+                        return idx
+        except (AttributeError, ValueError) as e:
+            log(f"Failed to restore previous selection: {e}")
+        return 0
 
     # --- Actions for help/discoverability ---
     def action_next_row(self):
@@ -585,13 +621,15 @@ class SearchScreen(Screen):
         try:
             coord = table.cursor_coordinate
             cur = getattr(coord, 'row', 0) if coord is not None else 0
-        except Exception:
+        except (AttributeError, ValueError) as e:
+            log(f"Failed to get current cursor position for next row: {e}")
             cur = 0
         try:
             total = getattr(table, 'row_count', None)
             if total is None:
                 total = len(getattr(table, 'rows', []))
-        except Exception:
+        except (AttributeError, ValueError) as e:
+            log(f"Failed to get table row count for next row: {e}")
             total = 0
         if total:
             try:
@@ -603,7 +641,8 @@ class SearchScreen(Screen):
                     scroll_to_cursor = getattr(table, 'scroll_to_cursor', None)
                     if callable(scroll_to_cursor):
                         scroll_to_cursor()
-            except Exception:
+            except (AttributeError, RuntimeError) as e:
+                log(f"Failed to move to next row: {e}")
                 pass
         self._last_g = False
 
@@ -614,7 +653,8 @@ class SearchScreen(Screen):
         try:
             coord = table.cursor_coordinate
             cur = getattr(coord, 'row', 0) if coord is not None else 0
-        except Exception:
+        except (AttributeError, ValueError) as e:
+            log(f"Failed to get current cursor position for previous row: {e}")
             cur = 0
         if True:
             try:
@@ -626,7 +666,8 @@ class SearchScreen(Screen):
                     scroll_to_cursor = getattr(table, 'scroll_to_cursor', None)
                     if callable(scroll_to_cursor):
                         scroll_to_cursor()
-            except Exception:
+            except (AttributeError, RuntimeError) as e:
+                log(f"Failed to move to previous row: {e}")
                 pass
         self._last_g = False
 
@@ -638,7 +679,8 @@ class SearchScreen(Screen):
             total = getattr(table, 'row_count', None)
             if total is None:
                 total = len(getattr(table, 'rows', []))
-        except Exception:
+        except (AttributeError, ValueError) as e:
+            log(f"Failed to get table row count for end action: {e}")
             total = 0
         if total:
             try:
@@ -650,6 +692,7 @@ class SearchScreen(Screen):
                     scroll_to_cursor = getattr(table, 'scroll_to_cursor', None)
                     if callable(scroll_to_cursor):
                         scroll_to_cursor()
-            except Exception:
+            except (AttributeError, RuntimeError) as e:
+                log(f"Failed to move to end row: {e}")
                 pass
         self._last_g = False

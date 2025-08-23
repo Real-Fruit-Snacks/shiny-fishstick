@@ -15,8 +15,9 @@ class DirectoryChangeHandler(FileSystemEventHandler):
             log("[WATCHDOG] Event:", getattr(event, "event_type", "?"), "on", getattr(event, "src_path", ""))
         try:
             self.callback()
-        except Exception:
+        except (RuntimeError, OSError) as e:
             # Don't let exceptions in callbacks kill the observer thread
+            log(f"[WATCHDOG] Callback failed: {e}")
             pass
 
 

@@ -2,8 +2,6 @@ from __future__ import annotations
 
 import os
 import re
-import threading
-import time
 from dataclasses import dataclass, field
 
 from rich.markup import escape
@@ -15,6 +13,9 @@ from textual.widgets import Button, DataTable, Input, Static
 
 from delta_vision.utils.config import MAX_FILES, MAX_PREVIEW_CHARS
 from delta_vision.utils.io import read_text
+from delta_vision.utils.keywords_scanner import KeywordScanner, ScanResult
+from delta_vision.utils.logger import log
+from delta_vision.utils.table_navigation import TableNavigationHandler
 from delta_vision.utils.watchdog import start_observer
 from delta_vision.widgets.footer import Footer
 from delta_vision.widgets.header import Header
@@ -32,13 +33,6 @@ class KwFileHit:
 
 
 class KeywordsScreen(Screen):
-    _last_scan_end: float = 0.0
-    # Hinted attributes for background scanning (set in __init__)
-    _scan_thread: threading.Thread | None
-    _scan_lock: threading.Lock
-    _scan_stop: threading.Event
-    _scan_running: bool
-    _pending_scan: bool
     BINDINGS = [
         ("q", "go_back", "Back"),
         ("enter", "open_selected", "Open"),
@@ -76,7 +70,6 @@ class KeywordsScreen(Screen):
 
         # Settings/state
         self._hits_only = True  # default Hits: On
-        self._last_g = False  # for vim-like gg
         self._detail_rows = []
         # preserve right-table selection when kw unchanged
         self._current_kw = None
@@ -87,13 +80,10 @@ class KeywordsScreen(Screen):
         self._stop_new = None
         self._stop_old = None
 
-        # Background scan state
-        self._scan_thread = None
-        self._scan_lock = threading.Lock()
-        self._scan_stop = threading.Event()
-        self._scan_running = False
-        self._pending_scan = False
-        self._last_scan_end = 0.0
+        # Background scanning and navigation
+        self._scanner = KeywordScanner(max_files=MAX_FILES, max_preview_chars=MAX_PREVIEW_CHARS)
+        self._scanner.set_completion_callback(self._on_scan_complete)
+        self._navigation = TableNavigationHandler()
 
 
     def compose(self) -> ComposeResult:
@@ -158,11 +148,12 @@ class KeywordsScreen(Screen):
                 self._table.zebra_stripes = True
             if self._details_table and hasattr(self._details_table, "zebra_stripes"):
                 self._details_table.zebra_stripes = True
-        except Exception:
+        except AttributeError:
+            log("Could not set zebra_stripes on table widget")
             pass
         self._load_keywords()
         # Kick off background scan; UI will populate when done
-        self._start_scan_background()
+        self._start_scan()
         if self._filter:
             self.set_focus(self._filter)
 
@@ -179,14 +170,16 @@ class KeywordsScreen(Screen):
                 # Use a higher debounce to coalesce bursts from large trees
                 self._observer_new, self._stop_new = start_observer(
                     self.new_folder_path, trigger_refresh, debounce_ms=1000)
-        except Exception:
+        except OSError:
+            log("Could not start file watcher for NEW folder")
             self._observer_new = None
             self._stop_new = None
         try:
             if self.old_folder_path and _os.path.isdir(self.old_folder_path):
                 self._observer_old, self._stop_old = start_observer(
                     self.old_folder_path, trigger_refresh, debounce_ms=1000)
-        except Exception:
+        except OSError:
+            log("Could not start file watcher for OLD folder")
             self._observer_old = None
             self._stop_old = None
 
@@ -196,33 +189,27 @@ class KeywordsScreen(Screen):
             stop_new = getattr(self, "_stop_new", None)
             if callable(stop_new):
                 stop_new()
-        except Exception:
+        except AttributeError:
+            log("Could not stop NEW folder watcher")
             pass
         try:
             stop_old = getattr(self, "_stop_old", None)
             if callable(stop_old):
                 stop_old()
-        except Exception:
+        except AttributeError:
+            log("Could not stop OLD folder watcher")
             pass
         # Observers are stopped via their stop callbacks above
         self._observer_new = None
         self._observer_old = None
         self._stop_new = None
         self._stop_old = None
-        # Stop background scan thread
+        # Stop background scanning
         try:
-            self._scan_stop.set()
-            t = self._scan_thread
-            if t and t.is_alive():
-                try:
-                    t.join(timeout=0.5)
-                except Exception:
-                    pass
-        except Exception:
+            self._scanner.stop_scan()
+        except (AttributeError, RuntimeError):
+            log("Could not stop background scanner")
             pass
-        self._scan_thread = None
-        self._scan_running = False
-        self._pending_scan = False
 
     # Background scanning
     def _maybe_rescan(self) -> None:
@@ -236,27 +223,16 @@ class KeywordsScreen(Screen):
         try:
             if not self._keywords:
                 return
-            if self._scan_running:
-                # A scan is already underway; mark pending and exit.
-                self._pending_scan = True
+            if self._scanner.is_scanning():
+                # A scan is already underway; scanner will handle pending
                 return
-            # Throttle rapid rescans to reduce flicker
-            try:
-                min_gap = 1.5
-                elapsed = time.monotonic() - float(self._last_scan_end or 0.0)
-                if elapsed < min_gap:
-                    try:
-                        self.set_timer(min_gap - max(0.0, elapsed), self._maybe_rescan)
-                    except Exception:
-                        pass
-                    return
-            except Exception:
-                pass
+            # Check for relevant changes before scanning
             if self._has_relevant_changes():
-                self._start_scan_background()
-        except Exception:
+                self._start_scan()
+        except (AttributeError, RuntimeError):
+            log("Error in maybe_rescan, falling back to full scan")
             # Fallback: if anything goes wrong, do the safe thing and scan.
-            self._start_scan_background()
+            self._start_scan()
 
     def _has_relevant_changes(self) -> bool:
         """Return True if NEW/OLD trees differ from our cached snapshot.
@@ -266,8 +242,7 @@ class KeywordsScreen(Screen):
         def side_changed(side: str, base: str | None) -> bool:
             if not base or not os.path.isdir(base):
                 # If previously had entries but base is now missing, that's a change
-                with self._scan_lock:
-                    return bool(self._file_meta.get(side))
+                return bool(self._file_meta.get(side))
             seen = set()
             try:
                 for root, _dirs, files in os.walk(base):
@@ -276,152 +251,96 @@ class KeywordsScreen(Screen):
                         try:
                             st = os.stat(p)
                             meta = (int(st.st_mtime), int(st.st_size))
-                        except Exception:
+                        except OSError:
+                            log(f"Could not stat file {p} during change detection")
                             # Treat failures as a change to refresh later
                             return True
                         seen.add(p)
-                        with self._scan_lock:
-                            prev = self._file_meta.get(side, {}).get(p)
+                        prev = self._file_meta.get(side, {}).get(p)
                         if prev != meta:
                             return True
                 # Also detect deletions
-                with self._scan_lock:
-                    for old_p in self._file_meta.get(side, {}).keys():
-                        if old_p not in seen:
-                            return True
-            except Exception:
+                for old_p in self._file_meta.get(side, {}).keys():
+                    if old_p not in seen:
+                        return True
+            except OSError:
+                log(f"Could not walk directory {base} during change detection")
                 return True
             return False
 
         return side_changed("NEW", self.new_folder_path) or side_changed("OLD", self.old_folder_path)
-    def _start_scan_background(self):
-        if not self._keywords:
-            return
-        if self._scan_running:
-            self._pending_scan = True
-            return
-        self._scan_stop.clear()
-        self._scan_running = True
-        self._pending_scan = False
-        self._set_status("Scanning…")
-        self._scan_thread = threading.Thread(
-            target=self._scan_worker, daemon=True)
+    def _start_scan(self):
+        """Start background scanning."""
         try:
-            self._scan_thread.start()
-        except Exception:
-            self._scan_running = False
-            self._set_status("")
+            if not self._keywords:
+                return
+            self._set_status("Scanning…")
+            self._scanner.start_scan(self._keywords, self.new_folder_path, self.old_folder_path)
+        except Exception as e:
+            log(f"Error starting scan: {e}")
+            self._set_status("Error starting scan")
 
     def _set_status(self, text: str) -> None:
         try:
             if self._status is not None:
                 self._status.update(text)
-        except Exception:
+        except AttributeError:
+            log("Could not update status widget")
             pass
 
-    def _scan_worker(self) -> None:
+    def _on_scan_complete(self, result: ScanResult):
+        """Called when background scan completes."""
         try:
-            self._perform_scan()
-        finally:
+            # Update data with scan results
+            self._update_data_from_scan_result(result)
 
-            def _finish():
-                self._scan_running = False
-                self._last_scan_end = time.monotonic()
-                self._set_status("Watching for changes")
-                self._populate_table()
-                if self._pending_scan and not self._scan_stop.is_set():
-                    self._pending_scan = False
-                    self._start_scan_background()
+            # Update UI
+            if self.app:
+                self.app.call_later(self._finish_scan_update)
+        except Exception as e:
+            log(f"Error processing scan results: {e}")
 
-            try:
-                if self.app:
-                    self.app.call_later(_finish)
-            except Exception:
-                pass
+    def _update_data_from_scan_result(self, result: ScanResult):
+        """Update internal data structures from scan result."""
+        # Convert KeywordFileHit summary to our internal format
+        summary = {}
+        for kw, _hit_info in result.summary.items():
+            # Build summary statistics like the original code
+            new_count = sum(result.file_counts.get("NEW", {}).get(fp, {}).get(kw, 0)
+                           for fp in result.file_counts.get("NEW", {}))
+            old_count = sum(result.file_counts.get("OLD", {}).get(fp, {}).get(kw, 0)
+                           for fp in result.file_counts.get("OLD", {}))
+            new_files = sum(1 for counts in result.file_counts.get("NEW", {}).values()
+                           if counts.get(kw, 0) > 0)
+            old_files = sum(1 for counts in result.file_counts.get("OLD", {}).values()
+                           if counts.get(kw, 0) > 0)
 
-    def _perform_scan(self) -> None:
-        kws = list(self._keywords)
-        if not kws:
-            return
-        alternation = "|".join(re.escape(w) for w in kws)
-        pat = re.compile(rf"(?<!\w)({alternation})(?!\w)", re.IGNORECASE)
+            summary[kw] = {
+                "NEW": new_count,
+                "OLD": old_count,
+                "TOTAL": new_count + old_count,
+                "NEW_FILES": new_files,
+                "OLD_FILES": old_files
+            }
 
-        def scan_side(side: str, base: str | None):
-            if not base or not os.path.isdir(base):
-                with self._scan_lock:
-                    self._file_meta[side].clear()
-                    self._file_kw_counts[side].clear()
-                return
-            seen_paths = set()
-            files_scanned = 0
-            for root, _dirs, files in os.walk(base):
-                if self._scan_stop.is_set():
-                    return
-                for name in files:
-                    file_path = os.path.join(root, name)
-                    seen_paths.add(file_path)
-                    if not os.path.isfile(file_path):
-                        continue
-                    try:
-                        st = os.stat(file_path)
-                        meta = (int(st.st_mtime), int(st.st_size))
-                    except Exception:
-                        continue
-                    prev = self._file_meta[side].get(file_path)
-                    if prev is not None and prev == meta:
-                        continue
-                    files_scanned += 1
-                    if files_scanned > MAX_FILES:
-                        break
-                    text, _enc = read_text(file_path)
-                    if text is None:
-                        text = ""
-                    counts: dict[str, int] = {}
-                    if text:
-                        for m in pat.finditer(text):
-                            kw = m.group(1)
-                            counts[kw] = counts.get(kw, 0) + 1
-                    with self._scan_lock:
-                        self._file_meta[side][file_path] = meta
-                        self._file_kw_counts[side][file_path] = counts
-                if files_scanned > MAX_FILES:
-                    break
-            with self._scan_lock:
-                existing = self._file_meta[side]
-                for old_path in list(existing.keys()):
-                    if old_path not in seen_paths:
-                        existing.pop(old_path, None)
-                        self._file_kw_counts[side].pop(old_path, None)
+        self._summary = summary
+        self._file_kw_counts = result.file_counts
+        self._file_meta = result.file_meta
 
-        scan_side("NEW", self.new_folder_path)
-        if self._scan_stop.is_set():
-            return
-        scan_side("OLD", self.old_folder_path)
-        if self._scan_stop.is_set():
-            return
-        # Build summary from per-file counts
-        summary: dict[str, dict[str, int]] = {}
-        with self._scan_lock:
-            for side in ("NEW", "OLD"):
-                for counts in self._file_kw_counts[side].values():
-                    for kw, c in counts.items():
-                        s = summary.setdefault(
-                            kw, {"NEW": 0, "OLD": 0, "TOTAL": 0, "NEW_FILES": 0, "OLD_FILES": 0})
-                        s[side] += c
-                        s["TOTAL"] += c
-        # Compute distinct file counts per side
-        with self._scan_lock:
-            for kw, s in summary.items():
-                s["NEW_FILES"] = sum(
-                    1 for counts in self._file_kw_counts["NEW"].values() if counts.get(kw, 0) > 0)
-                s["OLD_FILES"] = sum(
-                    1 for counts in self._file_kw_counts["OLD"].values() if counts.get(kw, 0) > 0)
-            self._summary = summary
+    def _finish_scan_update(self):
+        """Finish updating UI after scan completion."""
+        try:
+            self._set_status("Watching for changes")
+            self._populate_table()
+        except Exception as e:
+            log(f"Error updating UI after scan: {e}")
+
 
     def action_go_back(self):
         try:
             self.app.pop_screen()
-        except Exception:
+        except (AttributeError, RuntimeError):
+            log("Could not pop screen")
             pass
 
     def on_button_pressed(self, event):
@@ -440,9 +359,11 @@ class KeywordsScreen(Screen):
                 self._hits_btn.variant = "success" if self._hits_only else "error"
                 try:
                     self._hits_btn.refresh()
-                except Exception:
+                except (AttributeError, RuntimeError):
+                    log("Could not refresh hits button")
                     pass
-        except Exception:
+        except AttributeError:
+            log("Could not update hits button properties")
             pass
         self._populate_table()
 
@@ -450,14 +371,16 @@ class KeywordsScreen(Screen):
         try:
             if self._filter:
                 self._filter.value = ""
-        except Exception:
+        except AttributeError:
+            log("Could not clear filter input")
             pass
         self._populate_table()
         # Return focus to the filter for quick typing
         try:
             if self._filter:
                 self.set_focus(self._filter)
-        except Exception:
+        except (AttributeError, RuntimeError):
+            log("Could not set focus to filter input")
             pass
 
     def on_input_changed(self, event: Input.Changed):
@@ -471,20 +394,23 @@ class KeywordsScreen(Screen):
             if self._table:
                 try:
                     self.set_focus(self._table)
-                except Exception:
+                except (AttributeError, RuntimeError):
+                    log("Could not set focus to table")
                     pass
 
     def on_data_table_row_selected(self, event):
         if event.data_table.id == "kw-table":
             try:
                 self.set_focus(self._table)
-            except Exception:
+            except (AttributeError, RuntimeError):
+                log("Could not set focus to keywords table")
                 pass
             self._populate_details_for_selected()
         elif event.data_table.id == "kw-details":
             try:
                 self.set_focus(self._details_table)
-            except Exception:
+            except (AttributeError, RuntimeError):
+                log("Could not set focus to details table")
                 pass
             # Do not auto-open on selection; Enter will open explicitly
 
@@ -493,14 +419,16 @@ class KeywordsScreen(Screen):
         try:
             if getattr(event, 'data_table', None) is self._table:
                 self._populate_details_for_selected()
-        except Exception:
+        except AttributeError:
+            log("Could not populate details for selected keyword")
             pass
 
     def on_data_table_row_highlighted(self, event):  # DataTable.RowHighlighted
         try:
             if getattr(event, 'data_table', None) is self._table:
                 self._populate_details_for_selected()
-        except Exception:
+        except AttributeError:
+            log("Could not populate details for highlighted row")
             pass
 
     # DataTable.CellHighlighted
@@ -508,7 +436,8 @@ class KeywordsScreen(Screen):
         try:
             if getattr(event, 'data_table', None) is self._table:
                 self._populate_details_for_selected()
-        except Exception:
+        except AttributeError:
+            log("Could not populate details for highlighted cell")
             pass
 
     def _load_keywords(self):
@@ -519,7 +448,8 @@ class KeywordsScreen(Screen):
             return
         try:
             parsed = parse_keywords_md(self.keywords_path)
-        except Exception:
+        except (OSError, FileNotFoundError, ValueError):
+            log(f"Could not parse keywords file {self.keywords_path}")
             parsed = {}
         for cat, (color, words) in parsed.items():
             for w in words:
@@ -530,11 +460,10 @@ class KeywordsScreen(Screen):
 
     # Helper: iterate files containing a keyword on a side
     def _iter_files_for_keyword(self, side: str, kw: str):
-        with self._scan_lock:
-            files_map = self._file_kw_counts.get(side, {})
-            for file_path, counts in files_map.items():
-                if counts.get(kw, 0) > 0 and os.path.isfile(file_path):
-                    yield file_path
+        files_map = self._file_kw_counts.get(side, {})
+        for file_path, counts in files_map.items():
+            if counts.get(kw, 0) > 0 and os.path.isfile(file_path):
+                yield file_path
 
     def _populate_table(self):
         if not self._table:
@@ -548,7 +477,8 @@ class KeywordsScreen(Screen):
                 coord, 'row', 0) if coord is not None else 0
             if isinstance(prev_row_index, int) and 0 <= prev_row_index < len(self._row_keywords):
                 prev_kw = self._row_keywords[prev_row_index]
-        except Exception:
+        except (AttributeError, IndexError):
+            log("Could not get previous keyword selection")
             prev_kw = None
         self._table.clear()
         # Reusable dim separator cell
@@ -556,7 +486,8 @@ class KeywordsScreen(Screen):
         def sep_cell():
             try:
                 return Text("│", style="grey37")
-            except Exception:
+            except (AttributeError, RuntimeError):
+                log("Could not create separator cell")
                 return "|"
 
         filter_text = (
@@ -605,12 +536,14 @@ class KeywordsScreen(Screen):
                 target_row = self._row_keywords.index(prev_kw)
             elif isinstance(prev_row_index, int) and 0 <= prev_row_index < len(self._row_keywords):
                 target_row = prev_row_index
-        except Exception:
+        except (AttributeError, ValueError, IndexError):
+            log("Could not determine target row for table selection")
             target_row = 0
         try:
             if self._table and self._row_keywords:
                 self._table.move_cursor(row=target_row, column=0)
-        except Exception:
+        except (AttributeError, RuntimeError):
+            log("Could not move table cursor to target row")
             pass
         self._populate_details_for_selected()
 
@@ -625,7 +558,8 @@ class KeywordsScreen(Screen):
             row_index = getattr(coord, 'row', 0) if coord is not None else 0
             if isinstance(row_index, int) and 0 <= row_index < len(self._row_keywords):
                 kw = self._row_keywords[row_index]
-        except Exception:
+        except (AttributeError, IndexError):
+            log("Could not get selected keyword from table")
             kw = None
         # Capture previous right-table cursor to preserve position when keyword stays the same
         prev_dt_row = 0
@@ -634,14 +568,16 @@ class KeywordsScreen(Screen):
             if dt and getattr(dt, 'cursor_coordinate', None) is not None:
                 prev_dt_row = getattr(dt.cursor_coordinate, 'row', 0)
                 prev_dt_col = getattr(dt.cursor_coordinate, 'column', 0)
-        except Exception:
+        except AttributeError:
+            log("Could not get previous details table cursor position")
             prev_dt_row = 0
             prev_dt_col = 0
         if dt:
             try:
                 dt.clear()
                 self._detail_rows = []
-            except Exception:
+            except (AttributeError, RuntimeError):
+                log("Could not clear details table")
                 pass
         if not kw:
             return
@@ -680,7 +616,8 @@ class KeywordsScreen(Screen):
                             dt.add_row(side_cell, dsep, line_cell,
                                        dsep, Text.from_markup(highlighted))
                             self._detail_rows.append((file_path, idx))
-                        except Exception:
+                        except (AttributeError, RuntimeError):
+                            log("Could not add row to details table")
                             pass
 
         add_side("NEW")
@@ -696,7 +633,8 @@ class KeywordsScreen(Screen):
                     target_row = 0
                     target_col = 0
                 dt.move_cursor(row=target_row, column=target_col)
-        except Exception:
+        except (AttributeError, RuntimeError):
+            log("Could not set details table cursor position")
             pass
         # Update current keyword tracker
         self._current_kw = kw
@@ -722,113 +660,61 @@ class KeywordsScreen(Screen):
                         file_path, line_no, keywords_path=self.keywords_path)
                     self.app.push_screen(viewer)
                     return
-            except Exception:
+            except (AttributeError, IndexError):
+                log("Could not open selected file from details table")
                 pass
         return
 
     def on_key(self, event):
-        # Enter opens the selected hit on the right when focused there
-        try:
-            key = getattr(event, 'key', None)
-            if key == 'enter':
-                if self._details_table and self.screen.focused == self._details_table:
-                    event.stop()
-                    self.action_open_selected()
-                    return
-        except Exception:
-            pass
-        # When using arrow keys on the left table, let DataTable move the cursor
-        # then refresh the right-side details afterwards.
-        try:
-            key = getattr(event, 'key', None)
-            if key in ('up', 'down', 'left', 'right', 'home', 'end', 'pageup', 'pagedown'):
-                if self._table:
-                    # Defer a tick to ensure DataTable has updated its cursor
-                    try:
-                        self.set_timer(
-                            0.01, self._populate_details_for_selected)
-                    except Exception:
-                        if self.app:
-                            self.app.call_later(
-                                self._populate_details_for_selected)
-                # Do not stop the event; allow default navigation
-                return
-        except Exception:
-            pass
-        # Vim-like navigation: apply to whichever table currently has focus
-        key = getattr(event, 'key', None)
-        if key not in ('j', 'k', 'g', 'G'):
-            return
+        """Handle key events for table navigation and actions."""
+        # Prepare tables dictionary for navigation handler
+        tables = {
+            'main': self._table,
+            'details': self._details_table
+        }
 
-        focused_table = None
+        # Handle special cases first
+        key = getattr(event, 'key', None)
+
+        # Arrow keys need special handling for details refresh
+        if key in ('up', 'down', 'left', 'right', 'home', 'end', 'pageup', 'pagedown'):
+            if self._table:
+                # Let default navigation happen, then refresh details
+                self._schedule_details_refresh()
+            return  # Let default navigation occur
+
+        # Use navigation handler for enter and vim keys
+        handled = self._navigation.handle_key_event(
+            event,
+            self.screen.focused,
+            tables,
+            enter_callback=self._handle_enter_key,
+            navigation_callback=self._on_navigation_change
+        )
+
+        if handled:
+            # Check if we need to refresh details after vim navigation
+            if key in ('j', 'k', 'g', 'G') and self.screen.focused == self._table:
+                self._populate_details_for_selected()
+
+    def _handle_enter_key(self):
+        """Handle Enter key press for opening selected item."""
         try:
             if self._details_table and self.screen.focused == self._details_table:
-                focused_table = self._details_table
-            elif self._table and self.screen.focused == self._table:
-                focused_table = self._table
-        except Exception:
-            focused_table = None
-        if not focused_table:
-            return
+                self.action_open_selected()
+        except Exception as e:
+            log(f"Error handling Enter key: {e}")
 
+    def _on_navigation_change(self):
+        """Called when navigation changes occur."""
+        # This would be called after arrow key navigation if needed
+        pass
+
+    def _schedule_details_refresh(self):
+        """Schedule details refresh after navigation."""
         try:
-            event.stop()
-        except Exception:
-            pass
-
-        def get_pos(table):
-            cur = 0
-            try:
-                coord = getattr(table, 'cursor_coordinate', None)
-                if coord is not None:
-                    cur = getattr(coord, 'row', 0)
-            except Exception:
-                pass
-            try:
-                total = getattr(table, 'row_count', None)
-                if total is None:
-                    total = len(getattr(table, 'rows', []))
-            except Exception:
-                total = 0
-            return cur, total
-
-        def set_row(table, r):
-            try:
-                table.move_cursor(row=r, column=0)
-                # Ensure row is visible
-                scroll_to_row = getattr(table, 'scroll_to_row', None)
-                if callable(scroll_to_row):
-                    scroll_to_row(r)
-                else:
-                    scroll_to_cursor = getattr(table, 'scroll_to_cursor', None)
-                    if callable(scroll_to_cursor):
-                        scroll_to_cursor()
-                # If we moved on the left table, refresh right-side details
-                if table is self._table:
-                    self._populate_details_for_selected()
-            except Exception:
-                pass
-
-        if key == 'j':
-            cur, total = get_pos(focused_table)
-            if total:
-                set_row(focused_table, min(cur + 1, total - 1))
-            self._last_g = False
-        elif key == 'k':
-            cur, total = get_pos(focused_table)
-            if total:
-                set_row(focused_table, max(cur - 1, 0))
-            self._last_g = False
-        elif key == 'G':
-            _cur, total = get_pos(focused_table)
-            if total:
-                set_row(focused_table, total - 1)
-            self._last_g = False
-        elif key == 'g':
-            if self._last_g:
-                set_row(focused_table, 0)
-                self._last_g = False
-            else:
-                self._last_g = True
-        else:
-            self._last_g = False
+            self.set_timer(0.01, self._populate_details_for_selected)
+        except (AttributeError, RuntimeError):
+            log("Could not set timer for details refresh, trying call_later")
+            if self.app:
+                self.app.call_later(self._populate_details_for_selected)

@@ -22,7 +22,10 @@ from textual.screen import Screen
 from textual.widgets import Static, Tab, Tabs
 
 from delta_vision.utils.config import MAX_PREVIEW_CHARS
+from delta_vision.utils.diff_engine import compute_diff_rows
+from delta_vision.utils.file_parsing import parse_header_metadata, read_file_pair, extract_first_line_command
 from delta_vision.utils.fs import format_mtime, get_mtime, minutes_between
+from delta_vision.utils.logger import log
 from delta_vision.utils.text import make_keyword_pattern
 from delta_vision.widgets.footer import Footer
 from delta_vision.widgets.header import Header
@@ -147,7 +150,7 @@ class SideBySideDiffScreen(Screen):
                 yield self._right_panel
             # Footer inside compose scope
             yield Footer(
-                text=(" [orange1]q[/orange1] Back    " "[orange1]Shift+K[/orange1] Toggle Highlights"),
+                text=(" [orange1]q[/orange1] Back    [orange1]Shift+K[/orange1] Toggle Highlights"),
                 classes="footer-stream",
             )
 
@@ -161,14 +164,15 @@ class SideBySideDiffScreen(Screen):
         """
         # Try to show command in the title, like the file viewer
         # Also parse date/time for subtitles
-        self._new_meta = self._parse_header_meta(self.new_path) or {"date": None, "time": None, "cmd": None}
-        self._old_meta = self._parse_header_meta(self.old_path) or {"date": None, "time": None, "cmd": None}
+        self._new_meta = parse_header_metadata(self.new_path) or {"date": None, "time": None, "cmd": None}
+        self._old_meta = parse_header_metadata(self.old_path) or {"date": None, "time": None, "cmd": None}
         cmd = self._new_meta.get("cmd") or self._old_meta.get("cmd")
         self.title = f"{cmd} — Diff" if cmd else "Delta Vision — Diff"
         try:
             header = self.query_one(Header)
             header.title = self.title
-        except Exception:
+        except (AttributeError, RuntimeError):
+            log("Failed to update header title")
             pass
         # Filesystem modified timestamps
         self._old_created = format_mtime(self.old_path)
@@ -185,16 +189,18 @@ class SideBySideDiffScreen(Screen):
                     whole_word=True,
                     case_insensitive=True,
                 )
-        except Exception:
+        except (OSError, IOError, re.error, ValueError):
+            log("Failed to build keyword pattern from keywords file")
             self._kw_pattern = None
 
         # Build tab set (latest vs others) and populate initial view
         try:
             self._build_tabs_and_select_default()
-        except Exception:
+        except (OSError, IOError, AttributeError, RuntimeError):
+            log("Failed to build tabs, falling back to basic diff view")
             # Fallback to the provided pair only
-            old_lines, new_lines = self._read_files()
-            rows = self._build_rows(old_lines, new_lines)
+            old_lines, new_lines = read_file_pair(self.old_path, self.new_path)
+            rows = compute_diff_rows(old_lines, new_lines)
             self._rows_cache = rows
             self._populate(rows)
 
@@ -209,20 +215,42 @@ class SideBySideDiffScreen(Screen):
                 try:
                     if cont and hasattr(cont, 'scroll_home'):
                         cont.scroll_home()
-                except Exception:
+                except (AttributeError, RuntimeError):
+                    log("Failed to scroll content panel to home")
                     pass
-        except Exception:
+        except (AttributeError, RuntimeError):
+            log("Failed to cache content widgets for scrolling")
             self._left_content = None
             self._right_content = None
 
     def _build_tabs_and_select_default(self):
         """Create tabs for latest vs OLD and latest vs each prior NEW occurrence."""
+        # Find latest file and all occurrences
+        latest_new, others = self._find_latest_and_others()
+        
+        # Prepare tab system
+        tabs = self._prepare_tab_system()
+        if tabs is None:
+            return
+            
+        # Build all tabs
+        default_tab_id = self._build_all_tabs(tabs, latest_new, others)
+        
+        # Select default tab and populate content
+        self._select_default_tab_and_populate(default_tab_id, latest_new)
+
+    def _find_latest_and_others(self) -> tuple[str, list[str]]:
+        """Find the latest file and other occurrences for tab creation.
+        
+        Returns:
+            Tuple of (latest_new_path, other_occurrence_paths)
+        """
         # Determine the command and folder to search
         latest_new = self._newest_for_command(self.new_path)
         if latest_new is None:
             latest_new = self.new_path
 
-        meta0 = self._parse_header_meta(latest_new) if latest_new else None
+        meta0 = parse_header_metadata(latest_new) if latest_new else None
         cmd = meta0.get("cmd") if isinstance(meta0, dict) else None
         folder = os.path.dirname(latest_new) if latest_new else None
         occurrences: list[str] = []
@@ -232,26 +260,65 @@ class SideBySideDiffScreen(Screen):
         # Ensure the absolute newest appears as the baseline; other occurrences
         # (older NEWs) become additional tabs for comparison.
         others = [p for p in occurrences if p != latest_new]
+        
+        return latest_new, others
 
+    def _prepare_tab_system(self):
+        """Prepare the tab system by clearing existing tabs and resetting state.
+        
+        Returns:
+            The tabs widget, or None if not available
+        """
         tabs = self._tabs
         if tabs is None:
-            return
+            return None
 
         # Clear any existing tabs to avoid duplicates on rebuild
         try:
             clear = getattr(tabs, "clear", None)
             if callable(clear):
                 clear()
-        except Exception:
+        except (AttributeError, RuntimeError):
+            log("Failed to clear existing tabs")
             # If clear() is unavailable or fails, proceed; we'll overwrite maps
             pass
 
         # Build fresh tabs and reset internal maps used for cycling and lookup
         self._tab_map = {}
         self._tab_order = []
+        
+        return tabs
+
+    def _build_all_tabs(self, tabs, latest_new: str, others: list[str]) -> str | None:
+        """Build all tabs (prior NEW, OLD, fallback) and return default tab ID.
+        
+        Args:
+            tabs: The tabs widget
+            latest_new: Path to the latest NEW file
+            others: List of other occurrence paths
+            
+        Returns:
+            The default tab ID to select, or None if no tabs were created
+        """
         default_tab_id: str | None = None
 
         # Add prior NEW comparisons first (2nd newest, 3rd newest, ...)
+        default_tab_id = self._add_prior_new_tabs(tabs, latest_new, others, default_tab_id)
+        
+        # Add OLD comparison tab
+        default_tab_id = self._add_old_tab(tabs, latest_new, default_tab_id)
+        
+        # Add fallback tab if needed
+        default_tab_id = self._add_fallback_tab(tabs, latest_new, default_tab_id)
+        
+        return default_tab_id
+
+    def _add_prior_new_tabs(self, tabs, latest_new: str, others: list[str], default_tab_id: str | None) -> str | None:
+        """Add tabs for prior NEW file comparisons.
+        
+        Returns:
+            The updated default_tab_id (first tab added if none set yet)
+        """
         for idx, other in enumerate(others, start=1):
             # Directional minutes with sign: floor((latest - other)/60)
             # A negative value means "older than latest".
@@ -261,9 +328,10 @@ class SideBySideDiffScreen(Screen):
                 t_other = get_mtime(other)
                 if t_latest is not None and t_other is not None:
                     mins = math.floor((t_latest - t_other) / 60.0)
-            except Exception:
+            except (OSError, IOError, ValueError):
+                log(f"Failed to calculate time difference between {latest_new} and {other}")
                 mins = None
-            meta = self._parse_header_meta(other) or {}
+            meta = parse_header_metadata(other) or {}
             fallback = meta.get("date") or os.path.basename(other)
             label = f"{mins:+d}m" if mins is not None else fallback
             tab_id = f"n{idx}"
@@ -272,7 +340,15 @@ class SideBySideDiffScreen(Screen):
             self._tab_order.append(tab_id)
             if default_tab_id is None:
                 default_tab_id = tab_id
+        
+        return default_tab_id
 
+    def _add_old_tab(self, tabs, latest_new: str, default_tab_id: str | None) -> str | None:
+        """Add OLD comparison tab if OLD path exists.
+        
+        Returns:
+            The updated default_tab_id (OLD tab if none set yet)
+        """
         # Add OLD comparison last (if present)
         # Note: add even if the file may be missing to avoid an empty Tabs bar; content will show an error
         if self.old_path:
@@ -282,39 +358,58 @@ class SideBySideDiffScreen(Screen):
             self._tab_order.append(tab_id)
             if default_tab_id is None:
                 default_tab_id = tab_id
+        
+        return default_tab_id
 
+    def _add_fallback_tab(self, tabs, latest_new: str, default_tab_id: str | None) -> str | None:
+        """Add fallback tab if no other tabs were created.
+        
+        Returns:
+            The updated default_tab_id (fallback tab if none set yet)
+        """
         # Fallback: if no tabs were added (e.g., missing files and no prior NEWs),
         # create a safe default so the Tabs widget always has one option.
         if default_tab_id is None:
             try:
                 tab_id = "current"
                 tabs.add_tab(Tab("CURRENT", id=tab_id))
-                # Map to whatever we have; _read_files() will handle missing files gracefully
+                # Map to whatever we have; read_file_pair() will handle missing files gracefully
                 self._tab_map[tab_id] = (self.old_path or self.new_path, latest_new)
                 self._tab_order.append(tab_id)
                 default_tab_id = tab_id
-            except Exception:
+            except (AttributeError, RuntimeError):
+                log("Failed to create fallback tab")
                 pass
+        
+        return default_tab_id
 
-        # Select default tab and populate the panels
+    def _select_default_tab_and_populate(self, default_tab_id: str | None, latest_new: str):
+        """Select the default tab and populate the diff content.
+        
+        Args:
+            default_tab_id: The tab ID to activate, or None for fallback behavior
+            latest_new: Path to the latest NEW file for fallback diff
+        """
         if default_tab_id:
             try:
-                tabs.active = default_tab_id
+                self._tabs.active = default_tab_id
                 self._active_tab_id = default_tab_id
-            except Exception:
+            except (AttributeError, RuntimeError):
+                log(f"Failed to set active tab to {default_tab_id}")
                 pass
             pair = self._tab_map.get(default_tab_id)
             if pair:
                 self._set_pair_and_populate(pair[0], pair[1])
         else:
-            old_lines, new_lines = self._read_files()
-            rows = self._build_rows(old_lines, new_lines)
+            # Fallback: no tabs created, show basic diff
+            old_lines, new_lines = read_file_pair(self.old_path, self.new_path)
+            rows = compute_diff_rows(old_lines, new_lines)
             self._rows_cache = rows
             self._populate(rows)
 
     def _newest_for_command(self, some_path: str) -> str | None:
         """Return the newest file in the same folder with the same command as some_path."""
-        meta = self._parse_header_meta(some_path) or {}
+        meta = parse_header_metadata(some_path) or {}
         cmd = meta.get("cmd")
         folder = os.path.dirname(some_path)
         if not cmd or not os.path.isdir(folder):
@@ -331,12 +426,14 @@ class SideBySideDiffScreen(Screen):
                 if not os.path.isfile(path):
                     continue
                 try:
-                    meta = self._parse_header_meta(path) or {}
+                    meta = parse_header_metadata(path) or {}
                     if meta.get("cmd") == cmd:
                         items.append((path, os.path.getmtime(path)))
-                except Exception:
+                except (OSError, IOError, ValueError, AttributeError):
+                    log(f"Failed to process file {path} for command occurrences")
                     continue
-        except Exception:
+        except (OSError, IOError):
+            log(f"Failed to list directory {folder} for occurrences")
             pass
         items.sort(key=lambda t: t[1], reverse=True)
         return [p for p, _ in items]
@@ -346,13 +443,13 @@ class SideBySideDiffScreen(Screen):
         self.old_path = older_path
         self.new_path = latest_path
         # Update metadata and repaint
-        self._old_meta = self._parse_header_meta(self.old_path) or {"date": None, "time": None, "cmd": None}
-        self._new_meta = self._parse_header_meta(self.new_path) or {"date": None, "time": None, "cmd": None}
+        self._old_meta = parse_header_metadata(self.old_path) or {"date": None, "time": None, "cmd": None}
+        self._new_meta = parse_header_metadata(self.new_path) or {"date": None, "time": None, "cmd": None}
         # Refresh created timestamps for subtitles
         self._old_created = format_mtime(self.old_path)
         self._new_created = format_mtime(self.new_path)
-        old_lines, new_lines = self._read_files()
-        rows = self._build_rows(old_lines, new_lines)
+        old_lines, new_lines = read_file_pair(self.old_path, self.new_path)
+        rows = compute_diff_rows(old_lines, new_lines)
         self._rows_cache = rows
         self._populate(rows)
 
@@ -375,7 +472,8 @@ class SideBySideDiffScreen(Screen):
         current_id = None
         try:
             current_id = getattr(tabs, "active", None)
-        except Exception:
+        except (AttributeError, RuntimeError):
+            log("Failed to get current active tab")
             current_id = None
         if not isinstance(current_id, str) or current_id not in order:
             current_id = self._active_tab_id if isinstance(self._active_tab_id, str) else (order[0] if order else None)
@@ -392,7 +490,8 @@ class SideBySideDiffScreen(Screen):
         try:
             tabs.active = target_id
             self._active_tab_id = target_id
-        except Exception:
+        except (AttributeError, RuntimeError):
+            log(f"Failed to set active tab to {target_id}")
             # As a fallback, populate directly
             pair = self._tab_map.get(target_id)
             if pair:
@@ -419,7 +518,8 @@ class SideBySideDiffScreen(Screen):
                     fn = getattr(widget, fn_name, None)
                     if callable(fn):
                         fn()
-                except Exception:
+                except (AttributeError, RuntimeError):
+                    log(f"Failed to call {fn_name} on content widget")
                     pass
 
         if key == 'j':
@@ -427,26 +527,30 @@ class SideBySideDiffScreen(Screen):
             self._last_g = False
             try:
                 event.stop()
-            except Exception:
+            except (AttributeError, RuntimeError):
+                log("Failed to stop scroll down event")
                 pass
         elif key == 'k':
             both('scroll_up')
             self._last_g = False
             try:
                 event.stop()
-            except Exception:
+            except (AttributeError, RuntimeError):
+                log("Failed to stop scroll up event")
                 pass
         elif key == 'G':
             both('scroll_end')
             self._last_g = False
             try:
                 event.stop()
-            except Exception:
+            except (AttributeError, RuntimeError):
+                log("Failed to stop scroll end event")
                 pass
         elif key == 'g':
             try:
                 event.stop()
-            except Exception:
+            except (AttributeError, RuntimeError):
+                log("Failed to stop 'g' key event")
                 pass
             if self._last_g:
                 both('scroll_home')
@@ -458,21 +562,24 @@ class SideBySideDiffScreen(Screen):
             self.action_toggle_highlights()
             try:
                 event.stop()
-            except Exception:
+            except (AttributeError, RuntimeError):
+                log("Failed to stop toggle highlights event")
                 pass
         elif key == 'h':
             # Previous tab
             self.action_prev_tab()
             try:
                 event.stop()
-            except Exception:
+            except (AttributeError, RuntimeError):
+                log("Failed to stop prev tab event")
                 pass
         elif key == 'l':
             # Next tab
             self.action_next_tab()
             try:
                 event.stop()
-            except Exception:
+            except (AttributeError, RuntimeError):
+                log("Failed to stop next tab event")
                 pass
         else:
             self._last_g = False
@@ -481,7 +588,8 @@ class SideBySideDiffScreen(Screen):
         """Close this screen and return to the previous one."""
         try:
             self.app.pop_screen()
-        except Exception:
+        except (AttributeError, RuntimeError):
+            log("Failed to pop screen and go back")
             pass
 
     def action_toggle_highlights(self):
@@ -489,186 +597,65 @@ class SideBySideDiffScreen(Screen):
         try:
             self.keyword_highlight_enabled = not self.keyword_highlight_enabled
             self._populate(self._rows_cache)
-        except Exception:
+        except (AttributeError, RuntimeError):
+            log("Failed to toggle keyword highlights")
             pass
 
     def action_prev_tab(self):
         """Activate the previous tab (if any)."""
         try:
             self._cycle_tab(-1)
-        except Exception:
+        except (AttributeError, RuntimeError, ValueError, IndexError):
+            log("Failed to cycle to previous tab")
             pass
 
     def action_next_tab(self):
         """Activate the next tab (if any)."""
         try:
             self._cycle_tab(1)
-        except Exception:
+        except (AttributeError, RuntimeError, ValueError, IndexError):
+            log("Failed to cycle to next tab")
             pass
 
     # Prev/Next file navigation via p/n has been removed per request.
 
-    def _read_files(self) -> tuple[list[str], list[str]]:
-        """Read OLD/NEW files as lists of lines, skipping the header line.
-
-        Tries a few common encodings strictly, then falls back to utf-8 with
-        errors="ignore". On read failure, returns a single-line error message
-        list. The first line of each file (header) is excluded from the
-        returned content.
-        """
-
-        def read(fp: str) -> list[str]:
-            # Try common encodings, ignore header
-            for enc in ("utf-8", "utf-8-sig", "cp1252", "latin-1"):
-                try:
-                    with open(fp, encoding=enc, errors="strict") as f:
-                        lines = f.read().splitlines()
-                    return lines[1:] if lines else []
-                except UnicodeDecodeError:
-                    continue
-                except Exception:
-                    return ["[Error reading file]"]
-            try:
-                with open(fp, encoding="utf-8", errors="ignore") as f:
-                    lines = f.read().splitlines()
-                return lines[1:] if lines else []
-            except Exception:
-                return ["[Error reading file]"]
-
-        return read(self.old_path), read(self.new_path)
-
-    def _first_line_command(self, file_path: str) -> str | None:
-        """Extract the quoted command from the first line, if present."""
-        if not file_path or not os.path.isfile(file_path):
-            return None
-        # Try multiple encodings
-        for enc in ("utf-8", "utf-8-sig", "cp1252", "latin-1"):
-            try:
-                with open(file_path, encoding=enc, errors="strict") as f:
-                    first = f.readline()
-                break
-            except UnicodeDecodeError:
-                continue
-            except Exception:
-                return None
-        else:
-            try:
-                with open(file_path, encoding="utf-8", errors="ignore") as f:
-                    first = f.readline()
-            except Exception:
-                return None
-        m = re.search(r'"([^"]+)"', first or "")
-        return m.group(1) if m else None
-
-    def _parse_header_meta(self, file_path: str):
-        """Parse header line for date/time and command.
-
-        Expected formats:
-        - YYYYMMDD "command"
-        - YYYYMMDD HHMMSS "command"
-        - YYYYMMDDTHHMMSS "command"
-        Fallbacks: pull date from filename (8 digits) and leave time None.
-        """
-        # The first line is parsed with a few regular expressions. If that
-        # fails, we attempt to extract an 8-digit date from the filename.
-        if not file_path or not os.path.isfile(file_path):
-            return None
-        first = None
-        for enc in ("utf-8", "utf-8-sig", "cp1252", "latin-1"):
-            try:
-                with open(file_path, encoding=enc, errors="strict") as f:
-                    first = f.readline()
-                break
-            except UnicodeDecodeError:
-                continue
-            except Exception:
-                first = None
-                break
-        if first is None:
-            try:
-                with open(file_path, encoding="utf-8", errors="ignore") as f:
-                    first = f.readline()
-            except Exception:
-                first = ""
-        date = None
-        time = None
-        cmd = None
-        # Patterns
-        patterns = [
-            r"^\s*(\d{8})[ T](\d{6})\s+\"([^\"]+)\"",
-            r"^\s*(\d{8})T(\d{6})\s+\"([^\"]+)\"",
-            r"^\s*(\d{8})\s+\"([^\"]+)\"",
-        ]
-        for pat in patterns:
-            m = re.match(pat, first or "")
-            if m:
-                if len(m.groups()) == 3:
-                    date, time, cmd = m.group(1), m.group(2), m.group(3)
-                elif len(m.groups()) == 2:
-                    date, cmd = m.group(1), m.group(2)
-                break
-        if not date:
-            # Try from filename
-            bn = os.path.basename(file_path)
-            m = re.search(r"(\d{8})", bn)
-            if m:
-                date = m.group(1)
-        return {"date": date, "time": time, "cmd": cmd}
 
     def _minutes_between_paths(self, a: str, b: str) -> int | None:
         """Compute absolute minutes difference between two files' timestamps."""
         return minutes_between(a, b)
 
-    def _build_rows(self, old: list[str], new: list[str]) -> list[tuple[int | None, str, int | None, str, str]]:
-        """Return list of rows: (old_ln, old_text, new_ln, new_text, tag)
-        tag in {'equal','replace','delete','insert'}
-        Line numbers start at 1 for the first visible content line (header is skipped).
-        """
-        rows: list[tuple[int | None, str, int | None, str, str]] = []
-        sm = SequenceMatcher(None, old, new)
-        old_idx = 1  # first displayed line number
-        new_idx = 1
-        for tag, i1, i2, j1, j2 in sm.get_opcodes():
-            if tag == 'equal':
-                for k in range(i2 - i1):
-                    rows.append((old_idx, old[i1 + k], new_idx, new[j1 + k], 'equal'))
-                    old_idx += 1
-                    new_idx += 1
-            elif tag == 'replace':
-                length = max(i2 - i1, j2 - j1)
-                for k in range(length):
-                    o_text = old[i1 + k] if i1 + k < i2 else ""
-                    n_text = new[j1 + k] if j1 + k < j2 else ""
-                    o_ln = old_idx if i1 + k < i2 else None
-                    n_ln = new_idx if j1 + k < j2 else None
-                    if i1 + k < i2:
-                        old_idx += 1
-                    if j1 + k < j2:
-                        new_idx += 1
-                    rows.append((o_ln, o_text, n_ln, n_text, 'replace'))
-            elif tag == 'delete':
-                for k in range(i2 - i1):
-                    rows.append((old_idx, old[i1 + k], None, "", 'delete'))
-                    old_idx += 1
-            elif tag == 'insert':
-                for k in range(j2 - j1):
-                    rows.append((None, "", new_idx, new[j1 + k], 'insert'))
-                    new_idx += 1
-        return rows
 
     def _populate(self, rows: list[tuple[int | None, str, int | None, str, str]]):
         """Render the diff rows into the left/right panels.
 
-        Applies line numbers, word-level coloring, and optional keyword
-        underlining. Updates titles from parsed metadata and shows the files'
-        modified timestamps. Also clamps each rendered line to
-        ``MAX_PREVIEW_CHARS`` for performance/readability.
+        Orchestrates the diff rendering process by calling focused helper methods.
         """
         left = self._left_panel
         right = self._right_panel
         if not left or not right:
             return
 
+        # Create formatting functions
+        ln, word_diff = self._create_diff_formatters()
+        
+        # Render diff lines
+        left_lines, right_lines = self._render_diff_lines(rows, ln, word_diff)
+        
+        # Update panel titles and subtitles
+        self._update_panel_titles(left, right)
+        
+        # Apply line length limits
+        left_lines, right_lines = self._apply_line_length_limits(left_lines, right_lines)
+        
+        # Update panel contents
+        self._update_panel_contents(left, right, left_lines, right_lines)
+
+    def _create_diff_formatters(self):
+        """Create formatting functions for diff rendering.
+        
+        Returns:
+            Tuple of (line_number_formatter, word_diff_function)
+        """
         def ln(n: int | None) -> str:
             # Straight ASCII pipe as separator
             # For missing lines (None), don't draw the pipe; keep spacing for alignment only.
@@ -731,6 +718,19 @@ class SideBySideDiffScreen(Screen):
                     right_parts.append(f"[green]{seg_n}[/green]")
             return "".join(left_parts), "".join(right_parts)
 
+        return ln, word_diff
+
+    def _render_diff_lines(self, rows, ln, word_diff) -> tuple[list[str], list[str]]:
+        """Render diff rows into formatted left and right lines.
+        
+        Args:
+            rows: Diff rows from compute_diff_rows
+            ln: Line number formatter function
+            word_diff: Word-level diff function
+            
+        Returns:
+            Tuple of (left_lines, right_lines)
+        """
         left_lines: list[str] = []
         right_lines: list[str] = []
 
@@ -757,7 +757,10 @@ class SideBySideDiffScreen(Screen):
                 left_lines.append(f"{ln(o_ln)}{lmk}")
                 right_lines.append(f"{ln(n_ln)}{rmk}")
 
-        # Update titles with command and subtitle with file modified datetime
+        return left_lines, right_lines
+
+    def _update_panel_titles(self, left, right):
+        """Update panel titles and subtitles with metadata."""
         try:
             lp_title = left.query_one('.file-title', Static)
             rp_title = right.query_one('.file-title', Static)
@@ -768,32 +771,48 @@ class SideBySideDiffScreen(Screen):
             new_cmd = self._new_meta.get("cmd") if isinstance(self._new_meta, dict) else None
 
             left_title_text = (
-                f"[yellow]OLD[/yellow] — " f"{escape(old_cmd) if old_cmd else os.path.basename(self.old_path)}"
+                f"[yellow]OLD[/yellow] — {escape(old_cmd) if old_cmd else os.path.basename(self.old_path)}"
             )
-            right_title_text = (
-                f"[green]NEW[/green] — " f"{escape(new_cmd) if new_cmd else os.path.basename(self.new_path)}"
-            )
+            right_title_text = f"[green]NEW[/green] — {escape(new_cmd) if new_cmd else os.path.basename(self.new_path)}"
 
             lp_title.update(Text.from_markup(left_title_text))
             rp_title.update(Text.from_markup(right_title_text))
             lp_sub.update(f"Modified: {self._old_created}" if self._old_created else "")
             rp_sub.update(f"Modified: {self._new_created}" if self._new_created else "")
-        except Exception:
+        except (AttributeError, RuntimeError):
+            log("Failed to update panel titles and subtitles")
             pass
 
-        # Apply line-length cap for performance and readability
+    def _apply_line_length_limits(self, left_lines: list[str], right_lines: list[str]) -> tuple[list[str], list[str]]:
+        """Apply line length cap for performance and readability.
+        
+        Args:
+            left_lines: Lines for left panel
+            right_lines: Lines for right panel
+            
+        Returns:
+            Tuple of (clamped_left_lines, clamped_right_lines)
+        """
         def clamp_line(s: str) -> str:
             try:
                 if MAX_PREVIEW_CHARS and len(s) > MAX_PREVIEW_CHARS:
                     return s[:MAX_PREVIEW_CHARS] + " …"
-            except Exception:
+            except (ValueError, AttributeError):
+                log(f"Failed to clamp line length for: {s[:50]}...")
                 pass
             return s
 
-        left_lines = [clamp_line(s) for s in left_lines]
-        right_lines = [clamp_line(s) for s in right_lines]
+        return [clamp_line(s) for s in left_lines], [clamp_line(s) for s in right_lines]
 
-        # Update contents
+    def _update_panel_contents(self, left, right, left_lines: list[str], right_lines: list[str]):
+        """Update the actual panel content widgets with rendered lines.
+        
+        Args:
+            left: Left panel widget
+            right: Right panel widget
+            left_lines: Formatted lines for left panel
+            right_lines: Formatted lines for right panel
+        """
         try:
             lp_cont = left.query_one('.file-content', Vertical)
             rp_cont = right.query_one('.file-content', Vertical)
@@ -801,5 +820,6 @@ class SideBySideDiffScreen(Screen):
             rp_text = rp_cont.query_one('.file-text', Static)
             lp_text.update("\n".join(left_lines))
             rp_text.update("\n".join(right_lines))
-        except Exception:
+        except (AttributeError, RuntimeError):
+            log("Failed to update diff content panels")
             pass
