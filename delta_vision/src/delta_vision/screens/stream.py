@@ -319,11 +319,14 @@ class StreamScreen(Screen):
 
         return True, sorted(show_lines)
 
-    def _process_file_content(self, file_path: str, pattern: Optional[re.Pattern], keyword_lookup: Dict[str, Tuple[str, str]]) -> Optional[Tuple[str, str, bool]]:
+    def _process_file_content(
+        self, file_path: str, pattern: Optional[re.Pattern],
+        keyword_lookup: Dict[str, Tuple[str, str]]
+    ) -> Optional[Tuple[str, str, str, bool]]:
         """Process a file's content for display.
 
         Returns:
-            Tuple of (title, formatted_content, truncated) or None if file should be skipped.
+            Tuple of (title, command_text, formatted_content, truncated) or None if file should be skipped.
         """
         content, _enc = read_text(file_path)
         if not content:
@@ -333,13 +336,25 @@ class StreamScreen(Screen):
                 log(f"[ERROR] Failed to get basename for error message: {e}")
                 content = "[Error reading file]"
 
-        # Extract title from first line
-        match = re.search(r'"([^"]+)"', content)
-        title = match.group(1) if match else os.path.basename(file_path)
+        # Extract title and command from first line
+        lines = content.splitlines()
+        first_line = lines[0] if lines else ""
+
+        # Extract the actual command (after timestamp if present)
+        # Format: "timestamp "command"" or just "command"
+        command_match = re.search(r'"([^"]+)"', first_line)
+        if command_match:
+            command_text = command_match.group(1)
+            title = command_text  # Use command as title too
+        else:
+            # Fallback if no quotes found
+            command_text = first_line
+            title = os.path.basename(file_path)
+
         self._titles[file_path] = title
 
         # Get content lines (skip header line)
-        content_lines = content.splitlines()[1:] if len(content.splitlines()) > 1 else []
+        content_lines = lines[1:] if len(lines) > 1 else []
 
         # Apply keyword filtering
         show_file, filtered_indices = self._apply_keyword_filter(content_lines, pattern)
@@ -365,9 +380,12 @@ class StreamScreen(Screen):
             numbered_lines.append(f"{display_idx:>6} │ {highlighted_text}")
 
         content_with_numbers = "\n".join(numbered_lines)
-        return title, content_with_numbers, truncated
+        return title, command_text, content_with_numbers, truncated
 
-    def _update_file_panel(self, file_path: str, title: str, content_with_numbers: str, truncated: bool) -> Vertical:
+    def _update_file_panel(
+        self, file_path: str, title: str, command_text: str,
+        content_with_numbers: str, truncated: bool
+    ) -> Vertical:
         """Update or create a file panel with the given content."""
         panel = self.file_panels.get(file_path)
 
@@ -376,17 +394,20 @@ class StreamScreen(Screen):
         if panel:
             try:
                 file_content_widget = panel.query_one('.file-content')
-                file_title_widget = panel.query_one('.file-title')
+                file_command_widget = panel.query_one('.file-command')
             except Exception as e:
                 log(f"[ERROR] Failed to query panel widgets, will recreate: {e}")
                 needs_recreate = True
 
-        display_title = title + (" (truncated)" if truncated else "")
+        # Format command - the CSS handles the color and bold styling
+        # Add truncation indicator if needed
+        formatted_command = command_text + (" (truncated)" if truncated else "")
 
         if not panel or needs_recreate:
-            # Create new panel
+            # Create new panel with command and content
+            # Only show the command, not a separate title
             panel = Vertical(
-                Static(display_title, classes="file-title"),
+                Static(formatted_command, classes="file-command"),
                 Static(content_with_numbers, classes="file-content", markup=True),
                 classes="file-panel",
             )
@@ -394,7 +415,7 @@ class StreamScreen(Screen):
         else:
             # Update existing panel
             file_content_widget.update(content_with_numbers)
-            file_title_widget.update(display_title)
+            file_command_widget.update(formatted_command)
             try:
                 # Force layout to recalc sizes when content shrinks
                 panel.refresh(layout=True)
@@ -487,10 +508,10 @@ class StreamScreen(Screen):
             if result is None:
                 continue  # Skip this file (filtered out)
 
-            title, content_with_numbers, truncated = result
+            title, command_text, content_with_numbers, truncated = result
 
             # Update or create panel
-            panel = self._update_file_panel(file_path, title, content_with_numbers, truncated)
+            panel = self._update_file_panel(file_path, title, command_text, content_with_numbers, truncated)
             new_file_panels[file_path] = panel
 
             # Update metadata cache after successful update

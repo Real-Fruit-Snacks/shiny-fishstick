@@ -40,13 +40,19 @@ Header {
     align: left middle;
 }
 
-/* Input stretches, styled as a card */
+/* Input stretches, styled as a prominent card */
 #search-input {
     width: 1fr;
-    background: $panel-darken-1;
-    border: round $accent;
+    background: $surface;
+    border: thick $accent;
     padding: 0 1;
     height: 3;
+    text-style: bold;
+}
+
+#search-input:focus {
+    border: thick $primary;
+    background: $surface-lighten-1;
 }
 
 /* Results panel wraps summary + table */
@@ -69,6 +75,12 @@ Header {
     border: round $accent;
     background: $panel-darken-1;
     padding: 0 1;
+}
+
+/* Table styling improvements */
+DataTable {
+    scrollbar-background: $panel;
+    scrollbar-color: $accent;
 }
 
 .footer-search {

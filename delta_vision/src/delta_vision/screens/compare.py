@@ -220,10 +220,10 @@ class CompareScreen(BaseTableScreen):
             if self._changes_only and not changed:
                 continue
 
-            # Use symbols: ✓ for changed, ✗ for no change
+            # Use symbols: ◐ for changed, ◯ for no change (more subtle and clear)
             chg_text = Text(
-                "✓" if changed else "✗",
-                style=("bold green" if changed else "bold orange1"),
+                "◐" if changed else "◯",
+                style=("bold $success" if changed else "dim $text-muted"),
                 justify="center"
             )
             sep1 = Text("│", style="dim")
@@ -239,10 +239,10 @@ class CompareScreen(BaseTableScreen):
         """Return the style string for a pair type."""
         kind_upper = (kind or "").upper()
         if kind_upper == "DIFF":
-            return "bold yellow"
+            return "bold $error"  # Use theme's error color (usually red) for differences
         if kind_upper == "SAME":
-            return "bold green"
-        return "bold white"
+            return "bold $success"  # Use theme's success color for matches
+        return "bold $text"  # Use theme's text color for unknown types
 
     def _add_table_row(
         self, table: Any, type_text: str, sep1: str, chg_text: str, sep2: str, cmd_text: str, row_key: str

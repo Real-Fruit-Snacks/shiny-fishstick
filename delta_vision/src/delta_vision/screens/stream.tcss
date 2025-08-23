@@ -3,7 +3,7 @@
     dock: bottom;
     background: $panel-darken-2;
     border-top: heavy $primary;
-    padding: 0 1;
+    padding: 0 0;
     text-style: bold;
     align: left middle;
 }
@@ -33,31 +33,33 @@ Header {
     border: round $primary;
     height: auto;
     background: $panel-darken-2;
-    margin: 0 1 1 1;  /* top right bottom left - minimize top margin */
-    padding: 0;
+    margin: 0 1 2 1;  /* increased bottom margin for spacing between files */
+    padding: 1;  /* minimal padding around content */
     width: 100%;
     align: left top;
-    transition: background 300ms;
 }
 
 .file-title {
     color: $accent;
+    align: left top;
+}
+
+.file-command {
+    color: $accent;
+    align: left top;
     text-style: bold;
-    padding: 0 1;
-    border-bottom: heavy $accent;
-    margin-bottom: 0;
-    align: left middle;
-    background: $surface;
+    border-bottom: solid $primary;
+    width: 100%;
+    text-opacity: 100%;
+    /* Glow effect using lighter background */
 }
 
 .file-content {
     background: $panel-darken-1;
     color: $text;
-    padding: 0 1;
+    padding: 0 0;
     border: round $accent;
     margin-top: 0;
     margin-bottom: 0;
-    text-style: dim;
     align: left top;
-    /* font-family: monospace; */
 }

@@ -79,3 +79,8 @@ Header {
     background: $panel-darken-2;
     border-bottom: heavy $primary;
 }
+
+/* Tab styling improvements */
+TabbedContent {
+    background: $panel-darken-2;
+}

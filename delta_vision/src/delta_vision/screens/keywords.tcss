@@ -94,6 +94,8 @@ Header {
     padding: 0; /* remove inner padding around DataTable */
 }
 
+/* Keywords table styling */
+
 #kw-details {
     width: 4fr;
     height: 1fr; /* fill vertical space */
@@ -102,6 +104,8 @@ Header {
     margin-left: 0; /* avoid doubling the gap */
     padding: 0; /* remove inner padding around DataTable */
 }
+
+/* Details table styling */
 
 /* Footer bar for Keywords */
 .footer-search {
