@@ -35,7 +35,7 @@ This document provides a comprehensive analysis of all files and directories in 
 - `README.md` - Main project documentation
 - `CHANGELOG.md` - Version history
 - `ENVIRONMENT_VARIABLES_GUIDE.md` - Environment variable documentation
-- `keywords.md` - Sample keywords file for testing
+- `keywords.md` - Essential keywords file for testing (DO NOT DELETE)
 
 ---
 
@@ -62,13 +62,14 @@ This document provides a comprehensive analysis of all files and directories in 
 
 ---
 
-## 📁 TEST DATA (CONDITIONALLY NEEDED)
+## 📁 TEST DATA (NEEDED)
 
 ### Sample Data Directories
-**Status: KEEP for testing, but can be regenerated**
+**Status: NEEDED - Essential for testing**
 - `/New/` - Sample files for testing (23 files)
 - `/Old/` - Sample files for testing (3 files)
-- These are used for testing the compare/diff functionality
+- `keywords.md` - Sample keywords file for testing
+- These are actively used for testing the compare/diff functionality
 
 ---
 
@@ -155,9 +156,7 @@ rm -f delta_vision/src/delta_vision/themes/__REMOVE_ME__
 # rm CODE_ANALYSIS.md
 # rm RELEASE.md
 
-# Optional: Remove test data if can be regenerated
-# rm -rf New/
-# rm -rf Old/
+# NOTE: Do NOT remove New/, Old/, or keywords.md - they are needed for testing
 ```
 
 ---
@@ -193,14 +192,14 @@ shiny-fishstick/
 ├── .github/            # GitHub Actions
 ├── .vscode/            # IDE settings (optional)
 ├── .claude/            # Claude settings (optional)
-├── New/                # Test data (optional)
-├── Old/                # Test data (optional)
+├── New/                # Test data (NEEDED for testing)
+├── Old/                # Test data (NEEDED for testing)
 ├── .gitignore          # Git ignore rules
 ├── .pre-commit-config.yaml
 ├── CLAUDE.md           # Development guidance
 ├── README.md           # Main documentation
 ├── CHANGELOG.md        # Version history
-├── keywords.md         # Sample keywords
+├── keywords.md         # Sample keywords (NEEDED for testing)
 ├── pytest.ini          # Root test config
 └── ENVIRONMENT_VARIABLES_GUIDE.md
 ```
@@ -217,6 +216,8 @@ Create and run this script to perform the cleanup:
 
 echo "🧹 Starting Delta Vision cleanup..."
 
+# IMPORTANT: Preserving New/, Old/, and keywords.md as they are needed for testing
+
 # Remove build artifacts
 echo "Removing build directories..."
 rm -rf build/ dist/ build_app/ build_env/ release/
@@ -232,11 +233,15 @@ find . -type f -name "*.pyc" -delete
 echo "Removing special files..."
 rm -f delta_vision/src/delta_vision/themes/__REMOVE_ME__
 
+# NOTE: NOT removing New/, Old/, or keywords.md - they are essential for testing
+echo "✅ Preserving test data directories (New/, Old/) and keywords.md"
+
 # Optional: Remove virtual environment (uncomment if desired)
 # rm -rf .venv/
 
 echo "✅ Cleanup complete!"
 echo "Space saved: ~203MB"
+echo "Test data preserved: New/, Old/, keywords.md"
 
 # Show remaining structure
 echo "📁 Remaining structure:"
@@ -249,7 +254,7 @@ tree -I '.git|.venv' -L 2
 
 1. **Virtual Environment**: The `.venv/` directory is already in `.gitignore` and should not be committed to the repository.
 
-2. **Test Data**: The `New/` and `Old/` directories contain sample data for testing. They can be kept for convenience or regenerated as needed.
+2. **Test Data**: The `New/` and `Old/` directories and `keywords.md` file are **ESSENTIAL** for testing the application. They must be preserved as they are actively used for testing compare/diff functionality.
 
 3. **Build Scripts**: The `/scripts/` directory is essential for creating releases and should be kept.
 
