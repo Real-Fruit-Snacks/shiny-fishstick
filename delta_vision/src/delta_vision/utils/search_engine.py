@@ -26,7 +26,7 @@ class SearchMatch:
     is_error: bool = False
 
 
-@dataclass 
+@dataclass
 class SearchConfig:
     """Configuration for search operations."""
     max_files: int = 5000
@@ -36,41 +36,46 @@ class SearchConfig:
 
 class SearchEngine:
     """Core search engine for file content searching."""
-    
+
     def __init__(self, config: SearchConfig | None = None):
+        """Initialize the search engine with optional configuration.
+
+        Args:
+            config: Search configuration object. If None, uses default SearchConfig.
+        """
         self.config = config or SearchConfig()
-        
+
     def search_folders(self, query: str, folders: list[str], regex_mode: bool = False) -> tuple[list[SearchMatch], int, float]:
         """Search for query in the specified folders.
-        
+
         Args:
             query: Search query string
             folders: List of folder paths to search
             regex_mode: Whether to treat query as regex
-            
+
         Returns:
             Tuple of (matches, files_scanned, elapsed_time)
         """
         pattern = self._compile_pattern(query, regex_mode)
         if pattern is None:
             return [], 0, 0.0
-            
+
         matches = []
         files_scanned = 0
         start_time = perf_counter()
-        
+
         for folder in folders:
             folder_matches, folder_files = self._scan_folder(folder, pattern)
             matches.extend(folder_matches)
             files_scanned += folder_files
-            
+
             if files_scanned > self.config.max_files:
                 break
-                
+
         elapsed = perf_counter() - start_time
         matches.sort(key=lambda m: (m.file_path.lower(), m.line_no))
         return matches, files_scanned, elapsed
-        
+
     def _compile_pattern(self, query: str, regex_mode: bool) -> re.Pattern | None:
         """Compile search pattern based on mode."""
         try:
@@ -82,26 +87,26 @@ class SearchEngine:
         except re.error as e:
             log(f"Failed to compile search pattern: {e}")
             return None
-            
+
     def _scan_folder(self, folder: str, pattern: re.Pattern) -> tuple[list[SearchMatch], int]:
         """Scan a single folder for matches."""
         matches = []
         files_scanned = 0
-        
+
         try:
             for file_path in self._walk_files(folder):
                 if files_scanned >= self.config.max_files:
                     break
-                    
+
                 files_scanned += 1
                 file_matches = self._scan_file(file_path, pattern)
                 matches.extend(file_matches)
-                
+
         except Exception as e:
             matches.append(SearchMatch(folder, 0, f"[Error reading folder: {e}]", None, True))
-            
+
         return matches, files_scanned
-        
+
     def _walk_files(self, folder: str) -> Iterator[str]:
         """Walk through all files in a folder."""
         for root, _dirs, files in os.walk(folder):
@@ -109,24 +114,24 @@ class SearchEngine:
                 file_path = os.path.join(root, name)
                 if os.path.isfile(file_path):
                     yield file_path
-                    
+
     def _scan_file(self, file_path: str, pattern: re.Pattern) -> list[SearchMatch]:
         """Scan a single file for pattern matches."""
         matches = []
         text, _enc = read_text(file_path)
-        
+
         if not text:
             return matches
-            
+
         cmd_str = self._extract_command(file_path, text)
-        
+
         for line_no, line in enumerate(text.splitlines(), start=1):
             if pattern.search(line):
                 preview = self._create_preview(line, pattern)
                 matches.append(SearchMatch(file_path, line_no, preview, cmd_str))
-                
+
         return matches
-        
+
     def _extract_command(self, file_path: str, text: str) -> str | None:
         """Extract command string from first line of file."""
         try:
@@ -138,28 +143,28 @@ class SearchEngine:
         except (UnicodeError, ValueError, IndexError) as e:
             log(f"Failed to extract command from {file_path}: {e}")
         return None
-        
+
     def _create_preview(self, line: str, pattern: re.Pattern) -> str:
         """Create a preview string for a matched line, centering around the first match."""
         original = line.rstrip("\\n")
         if len(original) <= self.config.max_preview_chars:
             return original
-            
+
         # Find first match to center preview around
         match = pattern.search(original)
         if not match:
             return original[:self.config.max_preview_chars] + "…"
-            
+
         span_start, span_end = match.span()
         center = (span_start + span_end) // 2
         half = self.config.max_preview_chars // 2
         start = max(0, center - half)
         end = start + self.config.max_preview_chars
-        
+
         if end > len(original):
             end = len(original)
             start = max(0, end - self.config.max_preview_chars)
-            
+
         snippet = original[start:end]
         prefix = "…" if start > 0 else ""
         suffix = "…" if end < len(original) else ""

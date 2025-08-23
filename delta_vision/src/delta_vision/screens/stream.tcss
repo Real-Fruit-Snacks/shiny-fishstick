@@ -33,31 +33,22 @@ Header {
     border: round $primary;
     height: auto;
     background: $panel-darken-2;
-    margin: 1;
-    padding: 0 0;
+    margin: 0 1 1 1;  /* top right bottom left - minimize top margin */
+    padding: 0;
     width: 100%;
     align: left top;
     transition: background 300ms;
 }
 
 .file-title {
-    color: $primary;
-    text-style: bold italic;
-    padding: 0;
-    border-bottom: heavy $primary;
+    color: $accent;
+    text-style: bold;
+    padding: 0 1;
+    border-bottom: heavy $accent;
     margin-bottom: 0;
     align: left middle;
+    background: $surface;
 }
-    .file-panel {
-        border: round $primary;
-        background: $panel-darken-2;
-        margin: 0 1;
-        padding: 0 1;
-        width: 100%;
-        align: left top;
-        transition: background 300ms;
-        /* height removed to allow dynamic sizing */
-    }
 
 .file-content {
     background: $panel-darken-1;

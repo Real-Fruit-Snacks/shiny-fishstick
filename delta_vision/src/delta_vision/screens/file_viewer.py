@@ -6,18 +6,17 @@ import re
 from rich.text import Text
 from textual.app import ComposeResult
 from textual.containers import Vertical
-from textual.screen import Screen
 from textual.widgets import ListItem, ListView, Static
 
+from delta_vision.utils.base_screen import BaseScreen
 from delta_vision.utils.io import read_lines
+from delta_vision.utils.keyword_highlighter import highlighter
 from delta_vision.utils.logger import log
-from delta_vision.widgets.footer import Footer
-from delta_vision.widgets.header import Header
 
 from .keywords_parser import parse_keywords_md
 
 
-class FileViewerScreen(Screen):
+class FileViewerScreen(BaseScreen):
     """Simple file viewer that opens a file and jumps to a specific line."""
 
     BINDINGS = [
@@ -25,22 +24,22 @@ class FileViewerScreen(Screen):
         ("j", "next_line", "Down"),
         ("k", "prev_line", "Up"),
         ("G", "end", "End"),
-        ("K", "toggle_keywords", "Keywords"),
+        ("ctrl+k", "toggle_keywords", "Keywords"),
     ]
 
     CSS_PATH = "stream.tcss"
 
-    def __init__(self, file_path: str, line_no: int = 1, title: str | None = None, keywords_path: str | None = None):
-        super().__init__()
+    def __init__(self, file_path: str, line_no: int = 1, title: str | None = None, keywords_path: str | None = None, keywords_enabled: bool = False):
+        page_name = title or f"Viewer — {os.path.basename(file_path)}"
+        super().__init__(page_name=page_name)
         self.file_path = file_path
         self.line_no = max(1, int(line_no or 1))
-        self.viewer_title = title or f"Viewer — {os.path.basename(file_path)}"
         # UI refs
         self._list = None
         # Keyword highlighting
         self.keywords_path = keywords_path
         self.keywords_dict = None
-        self.keyword_highlight_enabled = False
+        self.keyword_highlight_enabled = keywords_enabled
         # Cached state for smooth repaints
         self._display_lines = []
         self._keyword_lookup = {}
@@ -52,8 +51,7 @@ class FileViewerScreen(Screen):
         # Render limits
         self._max_render_lines = 5000
 
-    def compose(self) -> ComposeResult:
-        yield Header(page_name="Viewer", show_clock=True)
+    def compose_main_content(self) -> ComposeResult:
         with Vertical(id="viewer-root"):
             with Vertical(classes="file-panel"):
                 yield Static("", id="viewer-title", classes="file-title")
@@ -61,12 +59,13 @@ class FileViewerScreen(Screen):
                 with Vertical(classes="file-content"):
                     self._list = ListView(id="viewer-list")
                     yield self._list
-            yield Footer(
-                text=" [orange1]q[/orange1] Back    [orange1]Shift+K[/orange1] Keywords", classes="footer-stream"
-            )
 
-    def on_mount(self):
-        self.title = self.viewer_title
+    def get_footer_text(self) -> str:
+        keywords_state = "ON" if self.keyword_highlight_enabled else "OFF"
+        return f" [orange1]q[/orange1] Back    [orange1]Ctrl+K[/orange1] Keywords: {keywords_state}"
+
+    async def on_mount(self):
+        await super().on_mount()  # This sets the title
         content, _enc = read_lines(self.file_path)
         if not content:
             content = ["[Error reading file]"]
@@ -75,7 +74,7 @@ class FileViewerScreen(Screen):
         if self.keywords_path and os.path.isfile(self.keywords_path):
             try:
                 self.keywords_dict = parse_keywords_md(self.keywords_path)
-            except (OSError, IOError, ValueError, AttributeError):
+            except (OSError, ValueError, AttributeError):
                 log(f"Failed to parse keywords file {self.keywords_path}")
                 self.keywords_dict = None
 
@@ -144,13 +143,6 @@ class FileViewerScreen(Screen):
                 log(f"Failed to set list index to {target_index}")
                 pass
 
-    def action_go_back(self):
-        try:
-            self.app.pop_screen()
-        except (AttributeError, RuntimeError):
-            log("Failed to pop screen")
-            pass
-
     def on_key(self, event):
         # Preserve only double-"g" go-to-top behavior here; other keys are actions
         key = getattr(event, 'key', None)
@@ -158,11 +150,7 @@ class FileViewerScreen(Screen):
             lv = self._list
             if not lv:
                 return
-            try:
-                self.set_focus(lv)
-            except (AttributeError, RuntimeError):
-                log("Failed to set focus on list view")
-                pass
+            self.safe_set_focus(lv)
             try:
                 event.stop()
             except AttributeError:
@@ -197,7 +185,7 @@ class FileViewerScreen(Screen):
         if not lv:
             return
         try:
-            self.set_focus(lv)
+            self.safe_set_focus(lv)
         except (AttributeError, RuntimeError):
             log("Failed to set focus on list view in next_line")
             pass
@@ -224,7 +212,7 @@ class FileViewerScreen(Screen):
         if not lv:
             return
         try:
-            self.set_focus(lv)
+            self.safe_set_focus(lv)
         except (AttributeError, RuntimeError):
             log("Failed to set focus on list view in prev_line")
             pass
@@ -250,7 +238,7 @@ class FileViewerScreen(Screen):
         if not lv:
             return
         try:
-            self.set_focus(lv)
+            self.safe_set_focus(lv)
         except (AttributeError, RuntimeError):
             log("Failed to set focus on list view in end")
             pass
@@ -269,6 +257,17 @@ class FileViewerScreen(Screen):
     def action_toggle_keywords(self):
         self.keyword_highlight_enabled = not self.keyword_highlight_enabled
         self._repaint_highlighting()
+        self._update_footer()
+
+    def _update_footer(self):
+        """Update footer text with current keyword toggle state."""
+        try:
+            from textual.widgets import Footer
+            from rich.text import Text
+            footer = self.query_one(Footer)
+            footer.update(Text.from_markup(self.get_footer_text()))
+        except Exception as e:
+            log(f"Failed to update footer: {e}")
 
     def _render_markup_for_line(self, i: int, line: str) -> str:
         disp_num = i + 1
@@ -276,13 +275,13 @@ class FileViewerScreen(Screen):
         left = f"[dim]{disp_num:>6} │ [/dim]"
         content = line
         if self.keyword_highlight_enabled and self._sorted_keywords:
-            for kw in self._sorted_keywords:
-                color = self._keyword_lookup.get(kw)
-                if not color:
-                    continue
-                pattern = rf'(?<!\\w)({re.escape(kw)})(?!\\w)'
-                repl = rf'[u][{color.lower()}]\1[/{color.lower()}][/u]'
-                content = re.sub(pattern, repl, content)
+            # Use centralized keyword highlighter with the sorted keywords and color lookup
+            content = highlighter.highlight_with_color_lookup(
+                line=content,
+                keywords=self._sorted_keywords,
+                color_lookup=self._keyword_lookup,
+                case_sensitive=False
+            )
         if orig_idx == self.line_no:
             content = f"[on grey23]{content}[/on grey23]"
         return left + content

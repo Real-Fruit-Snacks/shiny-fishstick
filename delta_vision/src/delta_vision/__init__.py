@@ -24,7 +24,7 @@ try:
             except OSError:
                 # Ignore invalid handle errors on Windows test environments
                 return None
-            except (OSError, IOError, RuntimeError) as e:
+            except RuntimeError as e:
                 # Be conservative: never let printing crash the app
                 log(f"[INIT] App._print failed: {e}")
                 return None

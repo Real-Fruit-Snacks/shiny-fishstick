@@ -10,19 +10,13 @@ Key responsibilities:
 
 from textual.app import ComposeResult
 from textual.containers import Center, Horizontal, Vertical
-from textual.screen import Screen
 from textual.widgets import Button, Static
 
-from delta_vision.screens import stream
-from delta_vision.screens.compare import CompareScreen
-from delta_vision.screens.keywords_screen import KeywordsScreen
-from delta_vision.screens.search import SearchScreen
-from delta_vision.utils.logger import log
-from delta_vision.widgets.footer import Footer
-from delta_vision.widgets.header import Header
+from delta_vision.utils.base_screen import BaseScreen
+from delta_vision.utils.screen_navigation import create_navigator
 
 
-class MainScreen(Screen):
+class MainScreen(BaseScreen):
     """DeltaVision home.
 
     Presents entry points to core features and a theme picker. This screen
@@ -39,24 +33,20 @@ class MainScreen(Screen):
     ]
 
 
-    def __init__(self, folder_path=None, old_folder_path=None, keywords_path=None):
-        super().__init__()
-        self.folder_path = folder_path
+    def __init__(self, new_folder_path=None, old_folder_path=None, keywords_path=None):
+        super().__init__(page_name="Home")
+        self.new_folder_path = new_folder_path
         self.old_folder_path = old_folder_path
         self.keywords_path = keywords_path
+        self._navigator = None
 
-    def compose(self) -> ComposeResult:
-        """Build the static layout for the Home screen.
+    def compose_main_content(self) -> ComposeResult:
+        """Build the main content layout for the Home screen.
 
         Returns a composition of:
-        - Header with clock
         - Hero banner (title + tagline)
         - Action cards for Stream/Search/Keywords/Compare
-        - Footer with hotkeys
         """
-        # Header
-        yield Header(page_name="Home", show_clock=True)
-
         # Main content root
         with Vertical(id="main-root"):
             # Hero section
@@ -109,15 +99,13 @@ class MainScreen(Screen):
                         classes="action-card placeholder",
                     )
 
-        # Footer with Home hotkeys
-        yield Footer(text=self._footer_text())
-
     async def on_mount(self):
-        """Set screen title after mount."""
-        self.title = "DeltaVision — Home"
-    
+        """Set screen title after mount and initialize navigator."""
+        await super().on_mount()
+        self._navigator = create_navigator(self.app)
 
-    def _footer_text(self) -> str:
+
+    def get_footer_text(self) -> str:
         return (
             " [orange1]1[/orange1] Stream    "
             "[orange1]2[/orange1] Search    "
@@ -129,42 +117,43 @@ class MainScreen(Screen):
     # Hotkey actions
     def action_open_stream(self):
         """Open the live Stream screen (tail NEW files with highlights)."""
-        self.app.push_screen(
-            stream.StreamScreen(
-                folder_path=self.folder_path,
+        if self._navigator:
+            self._navigator.open_stream_screen(
+                folder_path=self.new_folder_path,
                 keywords_path=self.keywords_path,
             )
-        )
 
     def action_open_search(self):
         """Open the Search screen (query across NEW and OLD)."""
-        self.app.push_screen(
-            SearchScreen(
-                new_folder_path=self.folder_path,
+        if self._navigator:
+            self._navigator.open_search_screen(
+                new_folder_path=self.new_folder_path,
                 old_folder_path=self.old_folder_path,
                 keywords_path=self.keywords_path,
             )
-        )
 
     def action_open_keywords(self):
         """Open the Keywords screen (manage categories and terms)."""
-        self.app.push_screen(
-            KeywordsScreen(
-                new_folder_path=self.folder_path,
+        if self._navigator:
+            self._navigator.open_keywords_screen(
+                new_folder_path=self.new_folder_path,
                 old_folder_path=self.old_folder_path,
                 keywords_path=self.keywords_path,
             )
-        )
 
     def action_open_compare(self):
-        self.app.push_screen(
-            CompareScreen(
-                new_folder_path=self.folder_path,
+        """Navigate to the folder comparison screen.
+
+        Opens the CompareScreen with the configured NEW and OLD folder paths
+        for side-by-side file comparison and analysis.
+        """
+        if self._navigator:
+            self._navigator.open_compare_screen(
+                new_folder_path=self.new_folder_path,
                 old_folder_path=self.old_folder_path,
                 keywords_path=self.keywords_path,
             )
-        )
-    
+
 
     def on_button_pressed(self, event):
         """Route button presses to corresponding action methods to eliminate duplication."""
@@ -174,7 +163,7 @@ class MainScreen(Screen):
             "keywords_button": self.action_open_keywords,
             "compare_button": self.action_open_compare,
         }
-        
+
         action = button_to_action.get(event.button.id)
         if action:
             action()

@@ -18,22 +18,20 @@ from rich.markup import escape
 from rich.text import Text
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical
-from textual.screen import Screen
 from textual.widgets import Static, Tab, Tabs
 
-from delta_vision.utils.config import MAX_PREVIEW_CHARS
+from delta_vision.utils.base_screen import BaseScreen
+from delta_vision.utils.config import config
 from delta_vision.utils.diff_engine import compute_diff_rows
-from delta_vision.utils.file_parsing import parse_header_metadata, read_file_pair, extract_first_line_command
+from delta_vision.utils.file_parsing import parse_header_metadata, read_file_pair
 from delta_vision.utils.fs import format_mtime, get_mtime, minutes_between
 from delta_vision.utils.logger import log
 from delta_vision.utils.text import make_keyword_pattern
-from delta_vision.widgets.footer import Footer
-from delta_vision.widgets.header import Header
 
 from .keywords_parser import parse_keywords_md
 
 
-class SideBySideDiffScreen(Screen):
+class SideBySideDiffScreen(BaseScreen):
     """Show a side-by-side diff between two files (NEW vs OLD).
 
     The first line of each file (header) is ignored for the diff.
@@ -41,7 +39,7 @@ class SideBySideDiffScreen(Screen):
 
     BINDINGS = [
         ("q", "go_back", "Back"),
-        ("K", "toggle_highlights", "Toggle Highlights"),
+        ("ctrl+k", "toggle_highlights", "Toggle Highlights"),
         ("h", "prev_tab", "Prev Tab"),
         ("l", "next_tab", "Next Tab"),
     ]
@@ -79,7 +77,7 @@ class SideBySideDiffScreen(Screen):
         nav_pairs: list[tuple[str, str]] | None = None,
         nav_index: int | None = None,
     ) -> None:
-        super().__init__()
+        super().__init__(page_name="Diff")
         self.new_path = new_path
         self.old_path = old_path
         self.keywords_path = keywords_path
@@ -113,14 +111,12 @@ class SideBySideDiffScreen(Screen):
         self._old_created = None
         self._new_created = None
 
-    def compose(self) -> ComposeResult:
-        """Build and yield the header, tabs, two file panels, and a footer.
+    def compose_main_content(self) -> ComposeResult:
+        """Build tabs and two file panels for side-by-side diff.
 
         Note: Titles/subtitles and file contents are populated in
         ``on_mount`` once metadata and rows are available.
         """
-        # Title updated on_mount once we parse command
-        yield Header(page_name="Diff", show_clock=True)
         # Tabs to switch comparisons (latest vs OLD / latest vs previous runs)
         self._tabs = Tabs(id="diff-tabs")
         yield self._tabs
@@ -148,13 +144,13 @@ class SideBySideDiffScreen(Screen):
                     classes="file-panel",
                 )
                 yield self._right_panel
-            # Footer inside compose scope
-            yield Footer(
-                text=(" [orange1]q[/orange1] Back    [orange1]Shift+K[/orange1] Toggle Highlights"),
-                classes="footer-stream",
-            )
 
-    def on_mount(self):
+    def get_footer_text(self) -> str:
+        """Return footer text with keybinding hints."""
+        highlights_state = "ON" if self.keyword_highlight_enabled else "OFF"
+        return f" [orange1]q[/orange1] Back    [orange1]Ctrl+K[/orange1] Highlights: {highlights_state}"
+
+    async def on_mount(self):
         """Parse header metadata, build tabs, and render the initial view.
 
         - Derives command/date/time from the first line of each file
@@ -162,18 +158,15 @@ class SideBySideDiffScreen(Screen):
         - Creates tabs for OLD and prior NEW occurrences and selects a default
         - Populates the left/right panels with the initial diff
         """
+        await super().on_mount()  # This handles basic setup
+
         # Try to show command in the title, like the file viewer
         # Also parse date/time for subtitles
         self._new_meta = parse_header_metadata(self.new_path) or {"date": None, "time": None, "cmd": None}
         self._old_meta = parse_header_metadata(self.old_path) or {"date": None, "time": None, "cmd": None}
         cmd = self._new_meta.get("cmd") or self._old_meta.get("cmd")
-        self.title = f"{cmd} — Diff" if cmd else "Delta Vision — Diff"
-        try:
-            header = self.query_one(Header)
-            header.title = self.title
-        except (AttributeError, RuntimeError):
-            log("Failed to update header title")
-            pass
+        if cmd:
+            self.title = f"{cmd} — Diff"
         # Filesystem modified timestamps
         self._old_created = format_mtime(self.old_path)
         self._new_created = format_mtime(self.new_path)
@@ -189,14 +182,14 @@ class SideBySideDiffScreen(Screen):
                     whole_word=True,
                     case_insensitive=True,
                 )
-        except (OSError, IOError, re.error, ValueError):
+        except (OSError, re.error, ValueError):
             log("Failed to build keyword pattern from keywords file")
             self._kw_pattern = None
 
         # Build tab set (latest vs others) and populate initial view
         try:
             self._build_tabs_and_select_default()
-        except (OSError, IOError, AttributeError, RuntimeError):
+        except (OSError, AttributeError, RuntimeError):
             log("Failed to build tabs, falling back to basic diff view")
             # Fallback to the provided pair only
             old_lines, new_lines = read_file_pair(self.old_path, self.new_path)
@@ -227,21 +220,21 @@ class SideBySideDiffScreen(Screen):
         """Create tabs for latest vs OLD and latest vs each prior NEW occurrence."""
         # Find latest file and all occurrences
         latest_new, others = self._find_latest_and_others()
-        
+
         # Prepare tab system
         tabs = self._prepare_tab_system()
         if tabs is None:
             return
-            
+
         # Build all tabs
         default_tab_id = self._build_all_tabs(tabs, latest_new, others)
-        
+
         # Select default tab and populate content
         self._select_default_tab_and_populate(default_tab_id, latest_new)
 
     def _find_latest_and_others(self) -> tuple[str, list[str]]:
         """Find the latest file and other occurrences for tab creation.
-        
+
         Returns:
             Tuple of (latest_new_path, other_occurrence_paths)
         """
@@ -260,12 +253,12 @@ class SideBySideDiffScreen(Screen):
         # Ensure the absolute newest appears as the baseline; other occurrences
         # (older NEWs) become additional tabs for comparison.
         others = [p for p in occurrences if p != latest_new]
-        
+
         return latest_new, others
 
     def _prepare_tab_system(self):
         """Prepare the tab system by clearing existing tabs and resetting state.
-        
+
         Returns:
             The tabs widget, or None if not available
         """
@@ -286,17 +279,17 @@ class SideBySideDiffScreen(Screen):
         # Build fresh tabs and reset internal maps used for cycling and lookup
         self._tab_map = {}
         self._tab_order = []
-        
+
         return tabs
 
     def _build_all_tabs(self, tabs, latest_new: str, others: list[str]) -> str | None:
         """Build all tabs (prior NEW, OLD, fallback) and return default tab ID.
-        
+
         Args:
             tabs: The tabs widget
             latest_new: Path to the latest NEW file
             others: List of other occurrence paths
-            
+
         Returns:
             The default tab ID to select, or None if no tabs were created
         """
@@ -304,18 +297,18 @@ class SideBySideDiffScreen(Screen):
 
         # Add prior NEW comparisons first (2nd newest, 3rd newest, ...)
         default_tab_id = self._add_prior_new_tabs(tabs, latest_new, others, default_tab_id)
-        
+
         # Add OLD comparison tab
         default_tab_id = self._add_old_tab(tabs, latest_new, default_tab_id)
-        
+
         # Add fallback tab if needed
         default_tab_id = self._add_fallback_tab(tabs, latest_new, default_tab_id)
-        
+
         return default_tab_id
 
     def _add_prior_new_tabs(self, tabs, latest_new: str, others: list[str], default_tab_id: str | None) -> str | None:
         """Add tabs for prior NEW file comparisons.
-        
+
         Returns:
             The updated default_tab_id (first tab added if none set yet)
         """
@@ -328,7 +321,7 @@ class SideBySideDiffScreen(Screen):
                 t_other = get_mtime(other)
                 if t_latest is not None and t_other is not None:
                     mins = math.floor((t_latest - t_other) / 60.0)
-            except (OSError, IOError, ValueError):
+            except (OSError, ValueError):
                 log(f"Failed to calculate time difference between {latest_new} and {other}")
                 mins = None
             meta = parse_header_metadata(other) or {}
@@ -340,12 +333,12 @@ class SideBySideDiffScreen(Screen):
             self._tab_order.append(tab_id)
             if default_tab_id is None:
                 default_tab_id = tab_id
-        
+
         return default_tab_id
 
     def _add_old_tab(self, tabs, latest_new: str, default_tab_id: str | None) -> str | None:
         """Add OLD comparison tab if OLD path exists.
-        
+
         Returns:
             The updated default_tab_id (OLD tab if none set yet)
         """
@@ -358,12 +351,12 @@ class SideBySideDiffScreen(Screen):
             self._tab_order.append(tab_id)
             if default_tab_id is None:
                 default_tab_id = tab_id
-        
+
         return default_tab_id
 
     def _add_fallback_tab(self, tabs, latest_new: str, default_tab_id: str | None) -> str | None:
         """Add fallback tab if no other tabs were created.
-        
+
         Returns:
             The updated default_tab_id (fallback tab if none set yet)
         """
@@ -380,12 +373,12 @@ class SideBySideDiffScreen(Screen):
             except (AttributeError, RuntimeError):
                 log("Failed to create fallback tab")
                 pass
-        
+
         return default_tab_id
 
     def _select_default_tab_and_populate(self, default_tab_id: str | None, latest_new: str):
         """Select the default tab and populate the diff content.
-        
+
         Args:
             default_tab_id: The tab ID to activate, or None for fallback behavior
             latest_new: Path to the latest NEW file for fallback diff
@@ -429,10 +422,10 @@ class SideBySideDiffScreen(Screen):
                     meta = parse_header_metadata(path) or {}
                     if meta.get("cmd") == cmd:
                         items.append((path, os.path.getmtime(path)))
-                except (OSError, IOError, ValueError, AttributeError):
+                except (OSError, ValueError, AttributeError):
                     log(f"Failed to process file {path} for command occurrences")
                     continue
-        except (OSError, IOError):
+        except OSError:
             log(f"Failed to list directory {folder} for occurrences")
             pass
         items.sort(key=lambda t: t[1], reverse=True)
@@ -498,108 +491,114 @@ class SideBySideDiffScreen(Screen):
                 self._set_pair_and_populate(pair[0], pair[1])
 
     def on_key(self, event):
-        """Handle vim-like scrolling and tab navigation keys.
+        """Handle vim-like scrolling and tab navigation keys - orchestrator for keyboard events.
 
         - j/k scroll both panels
         - g then g goes to top (like ``gg``)
         - G goes to end
-        - K toggles keyword underlining
+        - Ctrl+K toggles keyword underlining
         - h/l move to previous/next tab
         """
         key = getattr(event, 'key', None)
         if key is None:
             return
 
-        def both(fn_name: str):
-            for widget in (self._left_content, self._right_content):
-                try:
-                    if widget is None:
-                        continue
-                    fn = getattr(widget, fn_name, None)
-                    if callable(fn):
-                        fn()
-                except (AttributeError, RuntimeError):
-                    log(f"Failed to call {fn_name} on content widget")
-                    pass
-
+        # Dispatch to specific key handlers
         if key == 'j':
-            both('scroll_down')
-            self._last_g = False
-            try:
-                event.stop()
-            except (AttributeError, RuntimeError):
-                log("Failed to stop scroll down event")
-                pass
+            self._handle_scroll_down_key(event)
         elif key == 'k':
-            both('scroll_up')
-            self._last_g = False
-            try:
-                event.stop()
-            except (AttributeError, RuntimeError):
-                log("Failed to stop scroll up event")
-                pass
+            self._handle_scroll_up_key(event)
         elif key == 'G':
-            both('scroll_end')
-            self._last_g = False
-            try:
-                event.stop()
-            except (AttributeError, RuntimeError):
-                log("Failed to stop scroll end event")
-                pass
+            self._handle_scroll_end_key(event)
         elif key == 'g':
-            try:
-                event.stop()
-            except (AttributeError, RuntimeError):
-                log("Failed to stop 'g' key event")
-                pass
-            if self._last_g:
-                both('scroll_home')
-                self._last_g = False
-            else:
-                self._last_g = True
-        elif key == 'K':
-            # Route to action for discoverability/help integration
-            self.action_toggle_highlights()
-            try:
-                event.stop()
-            except (AttributeError, RuntimeError):
-                log("Failed to stop toggle highlights event")
-                pass
+            self._handle_go_to_top_key(event)
         elif key == 'h':
-            # Previous tab
-            self.action_prev_tab()
-            try:
-                event.stop()
-            except (AttributeError, RuntimeError):
-                log("Failed to stop prev tab event")
-                pass
+            self._handle_prev_tab_key(event)
         elif key == 'l':
-            # Next tab
-            self.action_next_tab()
-            try:
-                event.stop()
-            except (AttributeError, RuntimeError):
-                log("Failed to stop next tab event")
-                pass
+            self._handle_next_tab_key(event)
         else:
             self._last_g = False
 
-    def action_go_back(self):
-        """Close this screen and return to the previous one."""
+    def _handle_scroll_down_key(self, event):
+        """Handle j key - scroll both panels down."""
+        self._apply_to_both_panels('scroll_down')
+        self._last_g = False
+        self._stop_event(event, "scroll down")
+
+    def _handle_scroll_up_key(self, event):
+        """Handle k key - scroll both panels up."""
+        self._apply_to_both_panels('scroll_up')
+        self._last_g = False
+        self._stop_event(event, "scroll up")
+
+    def _handle_scroll_end_key(self, event):
+        """Handle G key - scroll both panels to end."""
+        self._apply_to_both_panels('scroll_end')
+        self._last_g = False
+        self._stop_event(event, "scroll end")
+
+    def _handle_go_to_top_key(self, event):
+        """Handle g key - go to top with gg pattern."""
+        self._stop_event(event, "'g' key")
+        if self._last_g:
+            self._apply_to_both_panels('scroll_home')
+            self._last_g = False
+        else:
+            self._last_g = True
+
+    def _handle_toggle_highlights_key(self, event):
+        """Handle Ctrl+K key - toggle keyword highlights."""
+        self.action_toggle_highlights()
+        self._stop_event(event, "toggle highlights")
+
+    def _handle_prev_tab_key(self, event):
+        """Handle h key - navigate to previous tab."""
+        self.action_prev_tab()
+        self._stop_event(event, "prev tab")
+
+    def _handle_next_tab_key(self, event):
+        """Handle l key - navigate to next tab."""
+        self.action_next_tab()
+        self._stop_event(event, "next tab")
+
+    def _apply_to_both_panels(self, method_name: str):
+        """Apply a method to both left and right content panels."""
+        for widget in (self._left_content, self._right_content):
+            try:
+                if widget is None:
+                    continue
+                method = getattr(widget, method_name, None)
+                if callable(method):
+                    method()
+            except (AttributeError, RuntimeError):
+                log(f"Failed to call {method_name} on content widget")
+
+    def _stop_event(self, event, action_description: str):
+        """Stop event propagation with error handling."""
         try:
-            self.app.pop_screen()
+            event.stop()
         except (AttributeError, RuntimeError):
-            log("Failed to pop screen and go back")
-            pass
+            log(f"Failed to stop {action_description} event")
 
     def action_toggle_highlights(self):
         """Toggle keyword highlighting in the diff and repaint."""
         try:
             self.keyword_highlight_enabled = not self.keyword_highlight_enabled
             self._populate(self._rows_cache)
+            self._update_footer()
         except (AttributeError, RuntimeError):
             log("Failed to toggle keyword highlights")
             pass
+
+    def _update_footer(self):
+        """Update footer text with current highlights toggle state."""
+        try:
+            from textual.widgets import Footer
+            from rich.text import Text
+            footer = self.query_one(Footer)
+            footer.update(Text.from_markup(self.get_footer_text()))
+        except Exception as e:
+            log(f"Failed to update footer: {e}")
 
     def action_prev_tab(self):
         """Activate the previous tab (if any)."""
@@ -637,22 +636,22 @@ class SideBySideDiffScreen(Screen):
 
         # Create formatting functions
         ln, word_diff = self._create_diff_formatters()
-        
+
         # Render diff lines
         left_lines, right_lines = self._render_diff_lines(rows, ln, word_diff)
-        
+
         # Update panel titles and subtitles
         self._update_panel_titles(left, right)
-        
+
         # Apply line length limits
         left_lines, right_lines = self._apply_line_length_limits(left_lines, right_lines)
-        
+
         # Update panel contents
         self._update_panel_contents(left, right, left_lines, right_lines)
 
     def _create_diff_formatters(self):
         """Create formatting functions for diff rendering.
-        
+
         Returns:
             Tuple of (line_number_formatter, word_diff_function)
         """
@@ -722,12 +721,12 @@ class SideBySideDiffScreen(Screen):
 
     def _render_diff_lines(self, rows, ln, word_diff) -> tuple[list[str], list[str]]:
         """Render diff rows into formatted left and right lines.
-        
+
         Args:
             rows: Diff rows from compute_diff_rows
             ln: Line number formatter function
             word_diff: Word-level diff function
-            
+
         Returns:
             Tuple of (left_lines, right_lines)
         """
@@ -785,18 +784,18 @@ class SideBySideDiffScreen(Screen):
 
     def _apply_line_length_limits(self, left_lines: list[str], right_lines: list[str]) -> tuple[list[str], list[str]]:
         """Apply line length cap for performance and readability.
-        
+
         Args:
             left_lines: Lines for left panel
             right_lines: Lines for right panel
-            
+
         Returns:
             Tuple of (clamped_left_lines, clamped_right_lines)
         """
         def clamp_line(s: str) -> str:
             try:
-                if MAX_PREVIEW_CHARS and len(s) > MAX_PREVIEW_CHARS:
-                    return s[:MAX_PREVIEW_CHARS] + " …"
+                if config.max_preview_chars and len(s) > config.max_preview_chars:
+                    return s[:config.max_preview_chars] + " …"
             except (ValueError, AttributeError):
                 log(f"Failed to clamp line length for: {s[:50]}...")
                 pass
@@ -806,7 +805,7 @@ class SideBySideDiffScreen(Screen):
 
     def _update_panel_contents(self, left, right, left_lines: list[str], right_lines: list[str]):
         """Update the actual panel content widgets with rendered lines.
-        
+
         Args:
             left: Left panel widget
             right: Right panel widget

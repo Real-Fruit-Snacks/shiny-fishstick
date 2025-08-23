@@ -11,7 +11,6 @@ import os
 import re
 import socket
 from pathlib import Path
-from typing import Optional, Tuple
 
 
 class ValidationError(Exception):
@@ -279,8 +278,8 @@ def validate_environment_string(value: str, name: str = "Environment variable") 
 
 
 def validate_config_paths(
-    new_path: Optional[str] = None, old_path: Optional[str] = None, keywords_path: Optional[str] = None
-) -> Tuple[Optional[str], Optional[str], Optional[str]]:
+    new_path: str | None = None, old_path: str | None = None, keywords_path: str | None = None
+) -> tuple[str | None, str | None, str | None]:
     """Validate all configuration paths at once.
 
     Args:
@@ -312,7 +311,7 @@ def validate_config_paths(
     return validated_new, validated_old, validated_keywords
 
 
-def validate_network_config(host: str, port: int | str) -> Tuple[str, int]:
+def validate_network_config(host: str, port: int | str) -> tuple[str, int]:
     """Validate network configuration (host and port).
 
     Args:

@@ -5,9 +5,6 @@ to ensure they properly prevent path traversal, validate ports/hostnames,
 and handle edge cases correctly.
 """
 
-import os
-import tempfile
-from pathlib import Path
 
 import pytest
 
@@ -49,7 +46,7 @@ class TestValidateDirectoryPath:
         """Test that passing a file instead of directory raises ValidationError."""
         test_file = tmp_path / "test.txt"
         test_file.write_text("content")
-        
+
         with pytest.raises(ValidationError, match="is not a directory"):
             validate_directory_path(str(test_file))
 
@@ -90,7 +87,7 @@ class TestValidateFilePath:
         """Test validation of valid existing file."""
         test_file = tmp_path / "test.txt"
         test_file.write_text("content")
-        
+
         result = validate_file_path(str(test_file))
         assert result == str(test_file.resolve())
 
@@ -125,10 +122,10 @@ class TestValidatePort:
         """Test that invalid port ranges are rejected."""
         with pytest.raises(ValidationError, match="must be between 1 and 65535"):
             validate_port(0)
-        
+
         with pytest.raises(ValidationError, match="must be between 1 and 65535"):
             validate_port(65536)
-        
+
         with pytest.raises(ValidationError, match="must be between 1 and 65535"):
             validate_port(-1)
 
@@ -136,7 +133,7 @@ class TestValidatePort:
         """Test that non-numeric port strings are rejected."""
         with pytest.raises(ValidationError, match="must be a number"):
             validate_port("abc")
-        
+
         with pytest.raises(ValidationError, match="must be a number"):
             validate_port("80.5")
 
@@ -182,7 +179,7 @@ class TestValidateHostname:
         """Test that invalid hostname formats are rejected."""
         with pytest.raises(ValidationError, match="is not a valid hostname"):
             validate_hostname("invalid..hostname")
-        
+
         with pytest.raises(ValidationError, match="is not a valid hostname"):
             validate_hostname("-invalid-start")
 
@@ -219,17 +216,17 @@ class TestValidateConfigPaths:
     def test_all_valid_paths(self, tmp_path):
         """Test validation when all paths are valid."""
         new_dir = tmp_path / "new"
-        old_dir = tmp_path / "old" 
+        old_dir = tmp_path / "old"
         keywords_file = tmp_path / "keywords.md"
-        
+
         new_dir.mkdir()
         old_dir.mkdir()
         keywords_file.write_text("# Test\nkeyword")
-        
+
         new_path, old_path, kw_path = validate_config_paths(
             str(new_dir), str(old_dir), str(keywords_file)
         )
-        
+
         assert new_path == str(new_dir.resolve())
         assert old_path == str(old_dir.resolve())
         assert kw_path == str(keywords_file.resolve())
@@ -245,7 +242,7 @@ class TestValidateConfigPaths:
         """Test validation with mix of valid paths and None."""
         new_dir = tmp_path / "new"
         new_dir.mkdir()
-        
+
         new_path, old_path, kw_path = validate_config_paths(str(new_dir), None, None)
         assert new_path == str(new_dir.resolve())
         assert old_path is None
@@ -268,7 +265,7 @@ class TestSecurityScenarios:
             "%2e%2e%2f%2e%2e%2f%2e%2e%2fetc%2fpasswd",  # URL encoded
             "....//....//etc/passwd",  # Double dots
         ]
-        
+
         for attack_path in attack_paths:
             with pytest.raises(ValidationError):
                 validate_directory_path(attack_path)
@@ -280,7 +277,7 @@ class TestSecurityScenarios:
             "../../../bin",
             "../../../../usr/bin",
         ]
-        
+
         for sys_path in system_paths:
             with pytest.raises(ValidationError):
                 validate_directory_path(sys_path)
@@ -292,7 +289,7 @@ class TestSecurityScenarios:
             "test\x00.txt",
             "\x00",
         ]
-        
+
         for null_path in null_byte_paths:
             with pytest.raises(ValidationError, match="is not a valid path"):
                 validate_directory_path(null_path, must_exist=False)

@@ -4,21 +4,19 @@ import os
 import re
 from dataclasses import dataclass, field
 
-from rich.markup import escape
 from rich.text import Text
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical
-from textual.screen import Screen
 from textual.widgets import Button, DataTable, Input, Static
 
-from delta_vision.utils.config import MAX_FILES, MAX_PREVIEW_CHARS
+from delta_vision.utils.base_screen import BaseTableScreen
+from delta_vision.utils.config import config
 from delta_vision.utils.io import read_text
+from delta_vision.utils.keyword_highlighter import highlighter
 from delta_vision.utils.keywords_scanner import KeywordScanner, ScanResult
 from delta_vision.utils.logger import log
 from delta_vision.utils.table_navigation import TableNavigationHandler
 from delta_vision.utils.watchdog import start_observer
-from delta_vision.widgets.footer import Footer
-from delta_vision.widgets.header import Header
 
 from .keywords_parser import parse_keywords_md
 
@@ -32,7 +30,7 @@ class KwFileHit:
     lines: list[tuple[int, str]] = field(default_factory=list)
 
 
-class KeywordsScreen(Screen):
+class KeywordsScreen(BaseTableScreen):
     BINDINGS = [
         ("q", "go_back", "Back"),
         ("enter", "open_selected", "Open"),
@@ -43,7 +41,7 @@ class KeywordsScreen(Screen):
     CSS_PATH = "keywords.tcss"
 
     def __init__(self, new_folder_path: str | None, old_folder_path: str | None, keywords_path: str | None):
-        super().__init__()
+        super().__init__(page_name="Keywords")
         self.new_folder_path = new_folder_path
         self.old_folder_path = old_folder_path
         self.keywords_path = keywords_path
@@ -81,13 +79,12 @@ class KeywordsScreen(Screen):
         self._stop_old = None
 
         # Background scanning and navigation
-        self._scanner = KeywordScanner(max_files=MAX_FILES, max_preview_chars=MAX_PREVIEW_CHARS)
+        self._scanner = KeywordScanner(max_files=config.max_files, max_preview_chars=config.max_preview_chars)
         self._scanner.set_completion_callback(self._on_scan_complete)
         self._navigation = TableNavigationHandler()
 
 
-    def compose(self) -> ComposeResult:
-        yield Header(page_name="Keywords", show_clock=True)
+    def compose_main_content(self) -> ComposeResult:
         with Vertical(id="kw-root"):
             with Vertical(id="kw-toolbar"):
                 with Horizontal(id="kw-toolbar-row"):
@@ -132,30 +129,24 @@ class KeywordsScreen(Screen):
                 self._details_table.add_column("│", key="dsep2", width=1)
                 self._details_table.add_column("Preview", key="preview")
                 yield self._details_table
-        yield Footer(
-            text=(
-                " [orange1]q[/orange1] Back    [orange1]Enter[/orange1] Open    "
-                "[orange1]H[/orange1] Hits Only    [orange1]C[/orange1] Clear"
-            ),
-            classes="footer-search",
+
+    def get_footer_text(self) -> str:
+        return (
+            " [orange1]q[/orange1] Back    [orange1]Enter[/orange1] Open    "
+            "[orange1]H[/orange1] Hits Only    [orange1]C[/orange1] Clear"
         )
 
-    def on_mount(self):
-        self.title = "Delta Vision — Keywords"
-        # Enable zebra striping for better row readability if supported
-        try:
-            if self._table and hasattr(self._table, "zebra_stripes"):
-                self._table.zebra_stripes = True
-            if self._details_table and hasattr(self._details_table, "zebra_stripes"):
-                self._details_table.zebra_stripes = True
-        except AttributeError:
-            log("Could not set zebra_stripes on table widget")
-            pass
+    async def on_mount(self):
+        await super().on_mount()  # This handles table setup and title
+        # Setup the details table which isn't the main _table
+        if self._details_table:
+            self.setup_data_table(self._details_table)
+
         self._load_keywords()
         # Kick off background scan; UI will populate when done
         self._start_scan()
         if self._filter:
-            self.set_focus(self._filter)
+            self.safe_set_focus(self._filter)
 
         # Start watchers for live updates when NEW/OLD folders change
         def trigger_refresh():
@@ -163,10 +154,8 @@ class KeywordsScreen(Screen):
                 # Schedule a conditional rescan that avoids flicker when only atime changes
                 self.app.call_later(self._maybe_rescan)
 
-        import os as _os
-
         try:
-            if self.new_folder_path and _os.path.isdir(self.new_folder_path):
+            if self.new_folder_path and os.path.isdir(self.new_folder_path):
                 # Use a higher debounce to coalesce bursts from large trees
                 self._observer_new, self._stop_new = start_observer(
                     self.new_folder_path, trigger_refresh, debounce_ms=1000)
@@ -175,7 +164,7 @@ class KeywordsScreen(Screen):
             self._observer_new = None
             self._stop_new = None
         try:
-            if self.old_folder_path and _os.path.isdir(self.old_folder_path):
+            if self.old_folder_path and os.path.isdir(self.old_folder_path):
                 self._observer_old, self._stop_old = start_observer(
                     self.old_folder_path, trigger_refresh, debounce_ms=1000)
         except OSError:
@@ -336,13 +325,6 @@ class KeywordsScreen(Screen):
             log(f"Error updating UI after scan: {e}")
 
 
-    def action_go_back(self):
-        try:
-            self.app.pop_screen()
-        except (AttributeError, RuntimeError):
-            log("Could not pop screen")
-            pass
-
     def on_button_pressed(self, event):
         if event.button.id == "kw-clear" and self._filter:
             self.action_clear_filter()
@@ -466,178 +448,291 @@ class KeywordsScreen(Screen):
                 yield file_path
 
     def _populate_table(self):
+        """Populate keywords table - orchestrator for table population."""
         if not self._table:
             return
-        # Capture current selection (by keyword) to restore after rebuild
+
+        # Capture current state and clear table
+        prev_kw, prev_row_index = self._capture_table_selection_state()
+        self._clear_table()
+
+        # Prepare and filter keywords
+        filter_text = self._get_filter_text()
+        sorted_keywords = self._get_sorted_keywords()
+
+        # Build table rows
+        self._build_keyword_table_rows(sorted_keywords, filter_text)
+
+        # Restore selection and update details
+        self._restore_table_selection(prev_kw, prev_row_index)
+        self._populate_details_for_selected()
+
+    def _capture_table_selection_state(self) -> tuple[str | None, int]:
+        """Capture current table selection state for restoration."""
         prev_kw = None
         prev_row_index = 0
         try:
             coord = getattr(self._table, 'cursor_coordinate', None)
-            prev_row_index = getattr(
-                coord, 'row', 0) if coord is not None else 0
+            prev_row_index = getattr(coord, 'row', 0) if coord is not None else 0
             if isinstance(prev_row_index, int) and 0 <= prev_row_index < len(self._row_keywords):
                 prev_kw = self._row_keywords[prev_row_index]
         except (AttributeError, IndexError):
             log("Could not get previous keyword selection")
             prev_kw = None
+        return prev_kw, prev_row_index
+
+    def _clear_table(self):
+        """Clear the table and reset row keywords list."""
         self._table.clear()
-        # Reusable dim separator cell
-
-        def sep_cell():
-            try:
-                return Text("│", style="grey37")
-            except (AttributeError, RuntimeError):
-                log("Could not create separator cell")
-                return "|"
-
-        filter_text = (
-            self._filter.value if self._filter else "").strip().lower()
-        keys = list(self._keywords)
-        keys.sort(key=lambda k: self._summary.get(
-            k, {}).get("TOTAL", 0), reverse=True)
         self._row_keywords = []
-        for kw in keys:
-            if filter_text and filter_text not in kw.lower():
-                continue
-            s = self._summary.get(
-                kw, {"NEW": 0, "OLD": 0, "TOTAL": 0, "NEW_FILES": 0, "OLD_FILES": 0})
-            if self._hits_only and s.get("TOTAL", 0) == 0:
-                continue
-            color = self._kw_color_by_word.get(kw, "yellow")
-            cat = self._kw_category_by_word.get(kw, "")
-            # Show keyword as plain text; colorize the Category cell instead
-            kw_text = kw  # left-aligned
-            if cat:
-                cat_cell = Text.from_markup(f"[{color}]{cat}[/{color}]")
-            else:
-                cat_cell = Text("")
-            cat_cell.justify = "center"
 
-            new_cell = Text(str(s.get("NEW", 0)), justify="center")
-            old_cell = Text(str(s.get("OLD", 0)), justify="center")
-            total_cell = Text(str(s.get("TOTAL", 0)), justify="center")
+    def _get_filter_text(self) -> str:
+        """Get current filter text from filter widget."""
+        return (self._filter.value if self._filter else "").strip().lower()
 
-            self._table.add_row(
-                kw_text,
-                sep_cell(),
-                cat_cell,
-                sep_cell(),
-                new_cell,
-                sep_cell(),
-                old_cell,
-                sep_cell(),
-                total_cell,
-            )
-            self._row_keywords.append(kw)
-        # Restore selection if possible and refresh details
-        target_row = 0
+    def _get_sorted_keywords(self) -> list[str]:
+        """Get keywords sorted by total count (highest first)."""
+        keys = list(self._keywords)
+        keys.sort(key=lambda k: self._summary.get(k, {}).get("TOTAL", 0), reverse=True)
+        return keys
+
+    def _build_keyword_table_rows(self, sorted_keywords: list[str], filter_text: str):
+        """Build and add all keyword table rows."""
+        for kw in sorted_keywords:
+            if self._should_include_keyword(kw, filter_text):
+                self._add_keyword_table_row(kw)
+
+    def _should_include_keyword(self, keyword: str, filter_text: str) -> bool:
+        """Check if keyword should be included based on filters."""
+        # Filter by text
+        if filter_text and filter_text not in keyword.lower():
+            return False
+
+        # Filter by hits-only mode
+        summary = self._summary.get(keyword, {"NEW": 0, "OLD": 0, "TOTAL": 0, "NEW_FILES": 0, "OLD_FILES": 0})
+        if self._hits_only and summary.get("TOTAL", 0) == 0:
+            return False
+
+        return True
+
+    def _add_keyword_table_row(self, keyword: str):
+        """Add a single keyword row to the table."""
+        summary = self._summary.get(keyword, {"NEW": 0, "OLD": 0, "TOTAL": 0, "NEW_FILES": 0, "OLD_FILES": 0})
+        color = self._kw_color_by_word.get(keyword, "yellow")
+        category = self._kw_category_by_word.get(keyword, "")
+
+        # Create table cells
+        kw_text = keyword
+        category_cell = self._create_category_cell(category, color)
+        new_cell = Text(str(summary.get("NEW", 0)), justify="center")
+        old_cell = Text(str(summary.get("OLD", 0)), justify="center")
+        total_cell = Text(str(summary.get("TOTAL", 0)), justify="center")
+
+        # Add row with separators
+        self._table.add_row(
+            kw_text,
+            self._create_separator_cell(),
+            category_cell,
+            self._create_separator_cell(),
+            new_cell,
+            self._create_separator_cell(),
+            old_cell,
+            self._create_separator_cell(),
+            total_cell,
+        )
+        self._row_keywords.append(keyword)
+
+    def _create_category_cell(self, category: str, color: str) -> Text:
+        """Create category cell with appropriate formatting."""
+        if category:
+            cat_cell = Text.from_markup(f"[{color}]{category}[/{color}]")
+        else:
+            cat_cell = Text("")
+        cat_cell.justify = "center"
+        return cat_cell
+
+    def _create_separator_cell(self) -> Text | str:
+        """Create separator cell for table columns."""
+        try:
+            return Text("│", style="grey37")
+        except (AttributeError, RuntimeError):
+            log("Could not create separator cell")
+            return "|"
+
+    def _restore_table_selection(self, prev_kw: str | None, prev_row_index: int):
+        """Restore previous table selection if possible."""
+        target_row = self._determine_target_row(prev_kw, prev_row_index)
+        self._move_table_cursor_to_row(target_row)
+
+    def _determine_target_row(self, prev_kw: str | None, prev_row_index: int) -> int:
+        """Determine which row to select after table rebuild."""
         try:
             if prev_kw and prev_kw in self._row_keywords:
-                target_row = self._row_keywords.index(prev_kw)
+                return self._row_keywords.index(prev_kw)
             elif isinstance(prev_row_index, int) and 0 <= prev_row_index < len(self._row_keywords):
-                target_row = prev_row_index
+                return prev_row_index
         except (AttributeError, ValueError, IndexError):
             log("Could not determine target row for table selection")
-            target_row = 0
+        return 0
+
+    def _move_table_cursor_to_row(self, target_row: int):
+        """Move table cursor to specified row."""
         try:
             if self._table and self._row_keywords:
                 self._table.move_cursor(row=target_row, column=0)
         except (AttributeError, RuntimeError):
             log("Could not move table cursor to target row")
-            pass
-        self._populate_details_for_selected()
 
     def _populate_details_for_selected(self):
+        """Populate details table for selected keyword - orchestrator for detail view population."""
         if not self._table or not self._details_table:
             return
-        dt = self._details_table
-        # Resolve selected keyword via our row→keyword map
-        kw = None
+
+        # Get selected keyword and previous cursor position
+        kw = self._get_selected_keyword()
+        if not kw:
+            return
+
+        prev_row, prev_col = self._capture_details_cursor_position()
+        self._clear_details_table()
+
+        # Populate details for both sides
+        self._add_keyword_side_details(kw, "NEW")
+        self._add_keyword_side_details(kw, "OLD")
+
+        # Restore cursor and update state
+        self._restore_details_cursor(kw, prev_row, prev_col)
+        self._update_current_keyword(kw)
+
+    def _get_selected_keyword(self) -> str | None:
+        """Get the currently selected keyword from the main table."""
         try:
             coord = getattr(self._table, 'cursor_coordinate', None)
             row_index = getattr(coord, 'row', 0) if coord is not None else 0
             if isinstance(row_index, int) and 0 <= row_index < len(self._row_keywords):
-                kw = self._row_keywords[row_index]
+                return self._row_keywords[row_index]
         except (AttributeError, IndexError):
             log("Could not get selected keyword from table")
-            kw = None
-        # Capture previous right-table cursor to preserve position when keyword stays the same
-        prev_dt_row = 0
-        prev_dt_col = 0
+        return None
+
+    def _capture_details_cursor_position(self) -> tuple[int, int]:
+        """Capture current cursor position in details table."""
         try:
+            dt = self._details_table
             if dt and getattr(dt, 'cursor_coordinate', None) is not None:
-                prev_dt_row = getattr(dt.cursor_coordinate, 'row', 0)
-                prev_dt_col = getattr(dt.cursor_coordinate, 'column', 0)
+                prev_row = getattr(dt.cursor_coordinate, 'row', 0)
+                prev_col = getattr(dt.cursor_coordinate, 'column', 0)
+                return prev_row, prev_col
         except AttributeError:
             log("Could not get previous details table cursor position")
-            prev_dt_row = 0
-            prev_dt_col = 0
+        return 0, 0
+
+    def _clear_details_table(self):
+        """Clear the details table and reset detail rows."""
+        dt = self._details_table
         if dt:
             try:
                 dt.clear()
                 self._detail_rows = []
             except (AttributeError, RuntimeError):
                 log("Could not clear details table")
-                pass
-        if not kw:
+
+    def _add_keyword_side_details(self, keyword: str, side: str):
+        """Add keyword match details for one side (NEW or OLD)."""
+        color = self._kw_color_by_word.get(keyword, "yellow")
+        kw_pattern = self._create_keyword_pattern(keyword)
+
+        for file_path in self._iter_files_for_keyword(side, keyword):
+            self._process_file_for_keyword(file_path, keyword, side, color, kw_pattern)
+
+    def _create_keyword_pattern(self, keyword: str) -> re.Pattern:
+        """Create compiled regex pattern for keyword matching."""
+        return re.compile(rf"(?<!\w)({re.escape(keyword)})(?!\w)", re.IGNORECASE)
+
+    def _process_file_for_keyword(self, file_path: str, keyword: str, side: str, color: str, pattern: re.Pattern):
+        """Process a single file for keyword matches."""
+        text, _enc = read_text(file_path)
+        if not text:
             return
 
-        def add_side(side: str):
-            color = self._kw_color_by_word.get(kw, "yellow")
-            kw_pat = re.compile(
-                rf"(?<!\w)({re.escape(kw)})(?!\w)", re.IGNORECASE)
-            for file_path in self._iter_files_for_keyword(side, kw):
-                text, _enc = read_text(file_path)
-                if not text:
-                    continue
-                for idx, line in enumerate(text.splitlines(), start=1):
-                    if not kw_pat.search(line):
-                        continue
-                    # Trim preview around first match
-                    plain = line
-                    if len(plain) > MAX_PREVIEW_CHARS:
-                        m = kw_pat.search(plain)
-                        if m:
-                            start = max(0, m.start() - MAX_PREVIEW_CHARS // 2)
-                            end = start + MAX_PREVIEW_CHARS
-                            plain = plain[start:end]
-                        else:
-                            plain = plain[:MAX_PREVIEW_CHARS]
-                    safe_preview = escape(plain)
-                    highlighted = kw_pat.sub(
-                        lambda mm: f"[{color}]{mm.group(1)}[/{color}]", safe_preview)
-                    side_cell = Text.from_markup(
-                        "[green]NEW[/green]" if side == "NEW" else "[yellow]OLD[/yellow]")
-                    side_cell.justify = "center"
-                    line_cell = Text(str(idx), justify="center")
-                    if dt:
-                        try:
-                            dsep = Text("│", style="grey37")
-                            dt.add_row(side_cell, dsep, line_cell,
-                                       dsep, Text.from_markup(highlighted))
-                            self._detail_rows.append((file_path, idx))
-                        except (AttributeError, RuntimeError):
-                            log("Could not add row to details table")
-                            pass
+        for line_num, line in enumerate(text.splitlines(), start=1):
+            if pattern.search(line):
+                self._create_keyword_match_row(line, line_num, side, color, pattern, file_path)
 
-        add_side("NEW")
-        add_side("OLD")
-        # Ensure there is a visible selection in the details table
+    def _create_keyword_match_row(
+        self, line: str, line_num: int, side: str, color: str, pattern: re.Pattern, file_path: str
+    ):
+        """Create and add a table row for a keyword match."""
+        # Trim preview around first match
+        plain = self._trim_line_preview(line, pattern)
+
+        # Create highlighted preview using centralized highlighter
+        highlighted = highlighter.highlight_with_pattern(
+            text=plain,
+            pattern=pattern,
+            color=color,
+            underline=False
+        )
+
+        # Create table cells
+        side_cell = self._create_side_cell(side)
+        line_cell = Text(str(line_num), justify="center")
+
+        # Add row to table
+        self._add_details_table_row(side_cell, line_cell, highlighted, line_num, file_path)
+
+    def _trim_line_preview(self, line: str, pattern: re.Pattern) -> str:
+        """Trim line to preview length, centering around first match."""
+        if len(line) <= config.max_preview_chars:
+            return line
+
+        match = pattern.search(line)
+        if match:
+            start = max(0, match.start() - config.max_preview_chars // 2)
+            end = start + config.max_preview_chars
+            return line[start:end]
+        else:
+            return line[:config.max_preview_chars]
+
+    def _create_side_cell(self, side: str) -> Text:
+        """Create side indicator cell (NEW/OLD)."""
+        if side == "NEW":
+            side_cell = Text.from_markup("[green]NEW[/green]")
+        else:
+            side_cell = Text.from_markup("[yellow]OLD[/yellow]")
+        side_cell.justify = "center"
+        return side_cell
+
+    def _add_details_table_row(self, side_cell: Text, line_cell: Text, highlighted: str, line_num: int, file_path: str):
+        """Add a row to the details table."""
+        dt = self._details_table
+        if dt:
+            try:
+                dsep = Text("│", style="grey37")
+                dt.add_row(side_cell, dsep, line_cell, dsep, Text.from_markup(highlighted))
+                self._detail_rows.append((file_path, line_num))
+            except (AttributeError, RuntimeError):
+                log("Could not add row to details table")
+
+    def _restore_details_cursor(self, keyword: str, prev_row: int, prev_col: int):
+        """Restore cursor position in details table."""
+        dt = self._details_table
         try:
             if dt and getattr(dt, 'row_count', 0):
                 # Preserve row/col when keyword didn't change; otherwise reset to top
-                if getattr(self, '_current_kw', None) == kw:
-                    target_row = max(0, min(prev_dt_row, dt.row_count - 1))
-                    target_col = max(0, prev_dt_col)
+                if getattr(self, '_current_kw', None) == keyword:
+                    target_row = max(0, min(prev_row, dt.row_count - 1))
+                    target_col = max(0, prev_col)
                 else:
                     target_row = 0
                     target_col = 0
                 dt.move_cursor(row=target_row, column=target_col)
         except (AttributeError, RuntimeError):
             log("Could not set details table cursor position")
-            pass
-        # Update current keyword tracker
-        self._current_kw = kw
+
+    def _update_current_keyword(self, keyword: str):
+        """Update current keyword tracker."""
+        self._current_kw = keyword
 
     def action_open_selected(self):
         # If details table focused, open selected hit
@@ -654,11 +749,17 @@ class KeywordsScreen(Screen):
                     if row_index < 0 or row_index >= len(self._detail_rows):
                         return
                     file_path, line_no = self._detail_rows[row_index]
-                    from .file_viewer import FileViewerScreen
 
-                    viewer = FileViewerScreen(
-                        file_path, line_no, keywords_path=self.keywords_path)
-                    self.app.push_screen(viewer)
+                    if not hasattr(self, '_navigator') or self._navigator is None:
+                        from delta_vision.utils.screen_navigation import create_navigator
+                        self._navigator = create_navigator(self.app)
+
+                    self._navigator.open_file_viewer(
+                        file_path=file_path,
+                        line_no=line_no,
+                        keywords_path=self.keywords_path,
+                        keywords_enabled=True,
+                    )
                     return
             except (AttributeError, IndexError):
                 log("Could not open selected file from details table")

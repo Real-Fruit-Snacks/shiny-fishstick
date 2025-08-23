@@ -20,7 +20,7 @@ def get_mtime(path: str) -> float | None:
     """
     try:
         return os.path.getmtime(path)
-    except (OSError, IOError) as e:
+    except OSError as e:
         log(f"[FS] Failed to get mtime for {path}: {e}")
         return None
 

@@ -13,19 +13,20 @@ from __future__ import annotations
 import os
 import re
 from dataclasses import dataclass
+from typing import Any
 
 from rich.text import Text
 from textual.app import ComposeResult
 from textual.containers import Vertical
-from textual.screen import Screen
 from textual.widgets import DataTable
 
+from delta_vision.utils.base_screen import BaseTableScreen
 from delta_vision.utils.io import read_lines
 from delta_vision.utils.logger import log
+from delta_vision.utils.screen_navigation import create_navigator
+from delta_vision.utils.table_navigation import TableNavigationHandler
 from delta_vision.utils.watchdog import start_observer
 from delta_vision.widgets.footer import Footer
-from delta_vision.widgets.header import Header
-from delta_vision.screens.diff_viewer import SideBySideDiffScreen
 
 
 @dataclass
@@ -43,7 +44,7 @@ class Pair:
     kind: str  # "DIFF" or "SAME"
 
 
-class CompareScreen(Screen):
+class CompareScreen(BaseTableScreen):
     """Table of comparison pairs with quick filtering and navigation."""
 
     BINDINGS = [
@@ -62,25 +63,24 @@ class CompareScreen(Screen):
         old_folder_path: str | None = None,
         keywords_path: str | None = None,
     ):
-        super().__init__()
+        super().__init__(page_name="Compare")
         self.new_folder_path = new_folder_path
         self.old_folder_path = old_folder_path
         self.keywords_path = keywords_path
         self._table = None
         self._pairs = []  # full computed pairs
         self._display_pairs = []  # pairs actually displayed in the table order
-        self._footer = None
         # Filter toggle (only show rows with changes)
         self._changes_only = False
-        # Track gg behavior
-        self._last_g = False
         # Watchdog observers
         self._observer_new = None
         self._observer_old = None
 
-    def compose(self) -> ComposeResult:
-        """Build header, results table, and footer (with a dynamic hint)."""
-        yield Header(page_name="Compare", show_clock=True)
+        # Table navigation handler
+        self._navigation = TableNavigationHandler()
+
+    def compose_main_content(self) -> ComposeResult:
+        """Build results table with comparison data."""
         with Vertical(id="compare-root"):
             self._table = DataTable(id="compare-table")
             # TYPE first, then Command
@@ -91,10 +91,8 @@ class CompareScreen(Screen):
             self._table.add_column(Text("│", style="dim", justify="center"), key="sep2", width=1)
             self._table.add_column("Command", key="cmd")
             yield self._table
-        self._footer = Footer(text=self._footer_text(), classes="footer-search")
-        yield self._footer
 
-    def _footer_text(self) -> str:
+    def get_footer_text(self) -> str:
         """Return footer text that reflects the current filter state."""
         state = "ON" if self._changes_only else "OFF"
         return (
@@ -104,18 +102,9 @@ class CompareScreen(Screen):
             "Legend: [green]✓[/green] changed, [orange1]✗[/orange1] same"
         )
 
-    def on_mount(self):
-        """Initialize table polish and start folder watchers, then scan."""
-        self.title = "Delta Vision — Compare"
-        try:
-            if self._table and hasattr(self._table, "zebra_stripes"):
-                self._table.zebra_stripes = True
-            # Row-only selection so the separator column isn't selectable
-            if self._table and hasattr(self._table, "cursor_type"):
-                self._table.cursor_type = "row"
-        except (AttributeError, RuntimeError) as e:
-            log(f"Failed to set table properties: {e}")
-            pass
+    async def on_mount(self) -> None:
+        """Initialize and start folder watchers, then scan."""
+        await super().on_mount()  # This handles table setup and title
         self._scan_and_populate()
 
         # Start watchers for live updates
@@ -126,19 +115,19 @@ class CompareScreen(Screen):
         try:
             if self.new_folder_path and os.path.isdir(self.new_folder_path):
                 self._observer_new, self._stop_new = start_observer(self.new_folder_path, trigger_refresh)
-        except (OSError, IOError, RuntimeError) as e:
+        except (OSError, RuntimeError) as e:
             log(f"Failed to start file watcher for new folder {self.new_folder_path}: {e}")
             self._observer_new = None
             self._stop_new = None
         try:
             if self.old_folder_path and os.path.isdir(self.old_folder_path):
                 self._observer_old, self._stop_old = start_observer(self.old_folder_path, trigger_refresh)
-        except (OSError, IOError, RuntimeError) as e:
+        except (OSError, RuntimeError) as e:
             log(f"Failed to start file watcher for old folder {self.old_folder_path}: {e}")
             self._observer_old = None
             self._stop_old = None
 
-    def on_unmount(self):
+    def on_unmount(self) -> None:
         """Stop any active observers when leaving the screen."""
         # Stop observers when leaving the screen
         # Prefer unified stop functions
@@ -170,15 +159,7 @@ class CompareScreen(Screen):
         self._stop_new = None
         self._stop_old = None
 
-    def action_go_back(self):
-        """Return to the previous screen."""
-        try:
-            self.app.pop_screen()
-        except (AttributeError, RuntimeError) as e:
-            log(f"Failed to go back to previous screen: {e}")
-            pass
-
-    def _scan_and_populate(self):
+    def _scan_and_populate(self) -> None:
         """Recompute comparison pairs and rebuild the table.
 
         Preserves the current selection where possible by mapping back from the
@@ -189,7 +170,7 @@ class CompareScreen(Screen):
         table = self._table
         if not table:
             return
-        
+
         prev_key = self._capture_current_selection(table)
         self._clear_table(table)
         display_pairs = self._process_and_add_pairs(table, pairs)
@@ -213,7 +194,7 @@ class CompareScreen(Screen):
             prev_key = None
         return prev_key
 
-    def _clear_table(self, table):
+    def _clear_table(self, table: Any) -> None:
         """Clear the comparison table."""
         try:
             table.clear()
@@ -227,27 +208,27 @@ class CompareScreen(Screen):
         for p in pairs:
             cmd_text = Text(p.command, style="bold")
             type_text = Text(p.kind, style=self._type_style(p.kind), justify="center")
-            
+
             # Compute change by comparing file contents (excluding header line)
             try:
                 changed = self._pair_changed(p)
-            except (OSError, IOError, UnicodeError) as e:
+            except (OSError, UnicodeError) as e:
                 log(f"Failed to determine if files changed for pair {p.command}: {e}")
                 changed = False
-            
+
             # Filter when 'changes only' is enabled
             if self._changes_only and not changed:
                 continue
-                
+
             # Use symbols: ✓ for changed, ✗ for no change
             chg_text = Text(
-                "✓" if changed else "✗", 
-                style=("bold green" if changed else "bold orange1"), 
+                "✓" if changed else "✗",
+                style=("bold green" if changed else "bold orange1"),
                 justify="center"
             )
             sep1 = Text("│", style="dim")
             sep2 = Text("│", style="dim")
-            
+
             # Add row to table
             row_key = (p.new_path, p.old_path, p.kind)
             self._add_table_row(table, type_text, sep1, chg_text, sep2, cmd_text, row_key)
@@ -263,7 +244,9 @@ class CompareScreen(Screen):
             return "bold green"
         return "bold white"
 
-    def _add_table_row(self, table, type_text, sep1, chg_text, sep2, cmd_text, row_key):
+    def _add_table_row(
+        self, table: Any, type_text: str, sep1: str, chg_text: str, sep2: str, cmd_text: str, row_key: str
+    ) -> None:
         """Add a row to the table with fallback error handling."""
         try:
             table.add_row(type_text, sep1, chg_text, sep2, cmd_text, key=row_key)  # type: ignore[call-arg]
@@ -271,7 +254,9 @@ class CompareScreen(Screen):
             log(f"Failed to add row with key to table: {e}")
             table.add_row(type_text, sep1, chg_text, sep2, cmd_text)
 
-    def _restore_selection_and_focus(self, table, display_pairs, prev_key):
+    def _restore_selection_and_focus(
+        self, table: Any, display_pairs: list[Pair], prev_key: tuple[str, str, str] | None
+    ) -> None:
         """Restore the previous selection and set focus to the table."""
         try:
             # Restore selection by key when possible
@@ -284,7 +269,9 @@ class CompareScreen(Screen):
             log(f"Failed to set table cursor position: {e}")
             pass
 
-    def _find_target_row(self, table, display_pairs, prev_key) -> int:
+    def _find_target_row(
+        self, table: Any, display_pairs: list[Pair], prev_key: tuple[str, str, str] | None
+    ) -> int:
         """Find the target row index to restore selection to."""
         target_row = 0
         try:
@@ -322,7 +309,7 @@ class CompareScreen(Screen):
             la = self._read_content_lines(a)
             lb = self._read_content_lines(b)
             return la != lb
-        except (OSError, IOError, UnicodeError, ValueError) as e:
+        except (OSError, UnicodeError, ValueError) as e:
             log(f"Failed to compare files {a} and {b}: {e}")
             return False
 
@@ -362,7 +349,7 @@ class CompareScreen(Screen):
     def _safe_mtime(self, path: str) -> float:
         try:
             return os.path.getmtime(path)
-        except (OSError, IOError) as e:
+        except OSError as e:
             log(f"Failed to get mtime for {path}: {e}")
             return 0.0
 
@@ -398,117 +385,46 @@ class CompareScreen(Screen):
         m = re.search(r'"([^"]+)"', line)
         return m.group(1) if m else None
 
-    def action_toggle_changes_only(self):
+    def action_toggle_changes_only(self) -> None:
         """Toggle showing only comparisons with changes."""
         try:
             self._changes_only = not self._changes_only
-            if self._footer:
-                self._footer.update(Text.from_markup(self._footer_text()))
+            footer = self.query_one(Footer)
+            footer.update(Text.from_markup(self.get_footer_text()))
             self._scan_and_populate()
         except (AttributeError, RuntimeError) as e:
             log(f"Failed to toggle changes only filter: {e}")
             pass
 
-    def on_key(self, event):
-        """Handle keyboard events for table navigation and selection."""
-        table = self._table
-        key = getattr(event, 'key', None)
-        if not table or key is None:
+    def on_key(self, event: Any) -> None:
+        """Handle key events for table navigation and actions."""
+        # Prepare tables dictionary for navigation handler
+        tables = {
+            'compare': self._table
+        }
+
+        # Handle navigation events through the integrated handler
+        handled = self._navigation.handle_key_event(
+            event,
+            self.screen.focused,
+            tables,
+            enter_callback=self._handle_enter_key,
+            navigation_callback=None  # No special navigation callback needed
+        )
+
+        # Let other events pass through if not handled by navigation
+        if not handled:
             return
 
-        if key == 'enter':
-            self._handle_enter_key(event, table)
-            return
-
-        if key in ('j', 'k', 'g', 'G'):
-            self._setup_navigation(event, table)
-            self._handle_navigation_keys(key, table)
-
-    def _handle_enter_key(self, event, table):
+    def _handle_enter_key(self) -> None:
         """Handle enter key for opening the selected comparison pair."""
         try:
-            if self.screen.focused == table:
-                event.stop()
-                self._open_selected_pair()
+            self._open_selected_pair()
         except (AttributeError, RuntimeError) as e:
             log(f"Failed to handle enter key for table selection: {e}")
             pass
 
-    def _setup_navigation(self, event, table):
-        """Set focus to table and stop event propagation for navigation keys."""
-        try:
-            self.set_focus(table)
-        except (AttributeError, RuntimeError) as e:
-            log(f"Failed to set focus to table: {e}")
-            pass
-        try:
-            event.stop()
-        except (AttributeError, RuntimeError) as e:
-            log(f"Failed to stop key event: {e}")
-            pass
-
-    def _handle_navigation_keys(self, key: str, table):
-        """Handle vim-style navigation keys (j, k, g, G)."""
-        cur, total = self._get_cursor_position(table)
-        
-        if key == 'j':
-            if total:
-                self._set_cursor_position(table, min(cur + 1, total - 1))
-            self._last_g = False
-        elif key == 'k':
-            if total:
-                self._set_cursor_position(table, max(cur - 1, 0))
-            self._last_g = False
-        elif key == 'G':
-            if total:
-                self._set_cursor_position(table, total - 1)
-            self._last_g = False
-        elif key == 'g':
-            if self._last_g:
-                self._set_cursor_position(table, 0)
-                self._last_g = False
-            else:
-                self._last_g = True
-        else:
-            self._last_g = False
-
-    def _get_cursor_position(self, table) -> tuple[int, int]:
-        """Get current cursor position and total row count."""
-        cur = 0
-        try:
-            coord = table.cursor_coordinate
-            if coord is not None:
-                cur = getattr(coord, 'row', 0)
-        except (AttributeError, ValueError) as e:
-            log(f"Failed to get table cursor position: {e}")
-            pass
-            
-        total = 0
-        try:
-            total = getattr(table, 'row_count', None)
-            if total is None:
-                total = len(getattr(table, 'rows', []))
-        except (AttributeError, ValueError) as e:
-            log(f"Failed to get table row count: {e}")
-            total = 0
-        return cur, total
-
-    def _set_cursor_position(self, table, row: int):
-        """Set cursor position with proper scrolling."""
-        try:
-            table.move_cursor(row=row, column=0)
-            scroll_to_row = getattr(table, 'scroll_to_row', None)
-            if callable(scroll_to_row):
-                scroll_to_row(row)
-            else:
-                scroll_to_cursor = getattr(table, 'scroll_to_cursor', None)
-                if callable(scroll_to_cursor):
-                    scroll_to_cursor()
-        except (AttributeError, RuntimeError) as e:
-            log(f"Failed to move table cursor to row {row}: {e}")
-            pass
-
-    def _open_selected_pair(self):
+    def _open_selected_pair(self) -> None:
         table = self._table
         if not table or not getattr(self, '_display_pairs', None):
             return
@@ -521,19 +437,19 @@ class CompareScreen(Screen):
                 return
             pair = self._display_pairs[row_index]
             # Navigation context removed; open only the selected pair
-            self.app.push_screen(
-                SideBySideDiffScreen(
-                    pair.new_path,
-                    pair.old_path,
-                    keywords_path=self.keywords_path,
-                )
+            if not hasattr(self, '_navigator') or self._navigator is None:
+                self._navigator = create_navigator(self.app)
+            self._navigator.open_diff_viewer(
+                new_path=pair.new_path,
+                old_path=pair.old_path,
+                keywords_path=self.keywords_path,
             )
         except (AttributeError, ValueError, IndexError, ImportError) as e:
             log(f"Failed to open selected comparison pair: {e}")
             pass
 
     # --- Actions for help/discoverability ---
-    def action_next_row(self):
+    def action_next_row(self) -> None:
         table = self._table
         if not table:
             return
@@ -563,9 +479,8 @@ class CompareScreen(Screen):
             except (AttributeError, RuntimeError) as e:
                 log(f"Failed to move cursor to next row: {e}")
                 pass
-        self._last_g = False
 
-    def action_prev_row(self):
+    def action_prev_row(self) -> None:
         table = self._table
         if not table:
             return
@@ -596,9 +511,8 @@ class CompareScreen(Screen):
             except (AttributeError, RuntimeError) as e:
                 log(f"Failed to move cursor to previous row: {e}")
                 pass
-        self._last_g = False
 
-    def action_end(self):
+    def action_end(self) -> None:
         table = self._table
         if not table:
             return
@@ -622,4 +536,3 @@ class CompareScreen(Screen):
             except (AttributeError, RuntimeError) as e:
                 log(f"Failed to move cursor to end row: {e}")
                 pass
-        self._last_g = False
