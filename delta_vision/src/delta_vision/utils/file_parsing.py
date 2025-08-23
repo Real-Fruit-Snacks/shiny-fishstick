@@ -100,8 +100,8 @@ def extract_first_line_command(file_path: str) -> Optional[str]:
             log(f"Failed to read first line from {file_path} with fallback encoding")
             return None
 
-    # Extract command from quotes
-    match = re.search(r'"([^"]+)"', first_line or "")
+    # Extract command from first to last quotes
+    match = re.search(r'"(.*)"', first_line or "")
     return match.group(1) if match else None
 
 

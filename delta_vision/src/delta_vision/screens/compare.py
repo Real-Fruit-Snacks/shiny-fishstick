@@ -379,10 +379,10 @@ class CompareScreen(BaseTableScreen):
         return self._extract_command(lines[0])
 
     def _extract_command(self, line: str) -> str | None:
-        """Return text between quotes in a header line."""
+        """Return text between first and last quotes in a header line."""
         if not line:
             return None
-        m = re.search(r'"([^"]+)"', line)
+        m = re.search(r'"(.*)"', line)
         return m.group(1) if m else None
 
     def action_toggle_changes_only(self) -> None:
