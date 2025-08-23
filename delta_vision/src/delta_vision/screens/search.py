@@ -501,17 +501,46 @@ class SearchScreen(BaseTableScreen):
                 else:
                     search_pattern = re.compile(re.escape(query), re.IGNORECASE)
 
-                # Find search matches and highlight them
+                # Find search matches and highlight them with theme-appropriate colors
                 plain_line = line  # Use original line for pattern matching
+                highlight_style = self._get_theme_highlight_style()
                 for match in search_pattern.finditer(plain_line):
                     start, end = match.span()
-                    # Use a more subtle style for search matches that will overlay keyword highlighting
-                    preview_text.stylize("bold black on yellow", start, end)
+                    # Use theme-appropriate style for search matches that will overlay keyword highlighting
+                    preview_text.stylize(highlight_style, start, end)
 
             return preview_text
         except (AttributeError, ValueError, re.error) as e:
             log(f"Failed to highlight matches in preview: {e}")
             return Text(line)
+
+    def _get_theme_highlight_style(self) -> str:
+        """Get theme-appropriate highlight style for search matches."""
+        try:
+            # Get current theme object
+            current_theme = self.app.get_theme(self.app.theme) if self.app else None
+            
+            if current_theme:
+                # Use theme's warning color (usually yellow/orange) for background
+                bg_color = current_theme.warning or "#FFAD66"  # Fallback to orange
+                
+                # Choose foreground color based on theme darkness
+                if current_theme.dark:
+                    # Dark theme: use dark text on warning background
+                    fg_color = current_theme.background or current_theme.panel or "#1F2430"
+                else:
+                    # Light theme: use foreground text on warning background  
+                    fg_color = current_theme.foreground or current_theme.background or "#4D4D4C"
+                
+                # Ensure we don't have None values
+                if fg_color and bg_color:
+                    return f"bold {fg_color} on {bg_color}"
+            
+        except (AttributeError, ValueError) as e:
+            log(f"Failed to get theme colors for highlighting: {e}")
+        
+        # Fallback to previous fixed style
+        return "bold black on yellow"
 
     def _restore_selection_and_focus(self, matches: list[SearchMatch], prev_key: str | None):
         """Restore previous selection and set focus to results table."""
