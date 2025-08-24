@@ -12,6 +12,7 @@ from delta_vision.utils.base_screen import BaseScreen
 from delta_vision.utils.io import read_lines
 from delta_vision.utils.keyword_highlighter import highlighter
 from delta_vision.utils.logger import log
+from delta_vision.utils.watchdog import start_observer
 
 from .keywords_parser import parse_keywords_md
 
@@ -29,7 +30,14 @@ class FileViewerScreen(BaseScreen):
 
     CSS_PATH = "stream.tcss"
 
-    def __init__(self, file_path: str, line_no: int = 1, title: str | None = None, keywords_path: str | None = None, keywords_enabled: bool = False):
+    def __init__(
+        self,
+        file_path: str,
+        line_no: int = 1,
+        title: str | None = None,
+        keywords_path: str | None = None,
+        keywords_enabled: bool = False,
+    ):
         page_name = title or f"Viewer — {os.path.basename(file_path)}"
         super().__init__(page_name=page_name)
         self.file_path = file_path
@@ -50,6 +58,9 @@ class FileViewerScreen(BaseScreen):
         self._last_g = False
         # Render limits
         self._max_render_lines = 5000
+        # Watchdog observer for live updates
+        self._observer = None
+        self._stop_observer = None
 
     def compose_main_content(self) -> ComposeResult:
         with Vertical(id="viewer-root"):
@@ -142,6 +153,122 @@ class FileViewerScreen(BaseScreen):
             except (AttributeError, ValueError, IndexError):
                 log(f"Failed to set list index to {target_index}")
                 pass
+
+        # Start watchdog observer for live updates
+        self._start_file_observer()
+
+    def _start_file_observer(self):
+        """Start file system observer for the viewed file."""
+        def trigger_refresh():
+            """Callback for filesystem changes."""
+            try:
+                self.call_later(self.refresh_file)
+            except Exception as e:
+                log(f"[ERROR] Failed in trigger_refresh: {e}")
+
+        # Start observer for the viewed file
+        try:
+            if self.file_path and os.path.isfile(self.file_path):
+                self._observer, self._stop_observer = start_observer(
+                    os.path.dirname(self.file_path), trigger_refresh, debounce_ms=250
+                )
+        except (OSError, RuntimeError) as e:
+            log(f"Failed to start observer for file {self.file_path}: {e}")
+            self._observer = None
+            self._stop_observer = None
+
+    def refresh_file(self):
+        """Refresh the file viewer when the file changes."""
+        # Store current selection index for restoration
+        current_index = 0
+        try:
+            if self._list:
+                current_index = getattr(self._list, 'index', 0) or 0
+        except (AttributeError, RuntimeError):
+            log("Failed to capture current list index")
+
+        # Re-read file and rebuild view
+        try:
+            content, _enc = read_lines(self.file_path)
+            if not content:
+                content = ["[Error reading file]"]
+
+            # Parse keywords if provided
+            if self.keywords_path and os.path.isfile(self.keywords_path):
+                try:
+                    self.keywords_dict = parse_keywords_md(self.keywords_path)
+                except (OSError, ValueError, AttributeError):
+                    log(f"Failed to parse keywords file {self.keywords_path}")
+                    self.keywords_dict = None
+
+            # Hide the first line (date/command header) from display
+            all_display_lines = content[1:] if len(content) > 0 else []
+            truncated = False
+            if len(all_display_lines) > self._max_render_lines:
+                display_lines = all_display_lines[: self._max_render_lines]
+                truncated = True
+            else:
+                display_lines = all_display_lines
+            self._display_lines = display_lines
+
+            # Update title with command from header line (between quotes)
+            try:
+                title_widget = self.query_one('#viewer-title', Static)
+                subtitle_widget = self.query_one('#viewer-subtitle', Static)
+                header_line = content[0] if content else ""
+                cmd_match = re.search(r'"([^"]+)"', header_line) if header_line else None
+                title_text = cmd_match.group(1) if cmd_match else self.viewer_title
+                title_widget.update(title_text)
+                if truncated:
+                    total = len(all_display_lines)
+                    shown = len(display_lines)
+                    subtitle_widget.update(f"Showing {shown} of {total} lines (truncated)")
+                else:
+                    subtitle_widget.update("")
+            except (AttributeError, RuntimeError):
+                log("Failed to update title and subtitle widgets")
+
+            if self._list is not None:
+                try:
+                    self._list.clear()
+                except (AttributeError, RuntimeError):
+                    log("Failed to clear list widget")
+
+                # Build keyword caches
+                self._keyword_lookup = {}
+                if self.keywords_dict:
+                    for _cat, (color, words) in self.keywords_dict.items():
+                        for w in words:
+                            self._keyword_lookup[w] = color
+                self._sorted_keywords = sorted(self._keyword_lookup.keys(), key=len, reverse=True)
+
+                # Build line widgets and keep references for smooth repaint
+                self._line_widgets = []
+                for i, line in enumerate(self._display_lines):
+                    markup = self._render_markup_for_line(i, line)
+                    static = Static(Text.from_markup(markup))
+                    self._line_widgets.append(static)
+                    self._list.append(ListItem(static))
+
+                # Restore selection/scroll to preserved position
+                try:
+                    # Ensure the index is within bounds
+                    max_index = len(self._display_lines) - 1
+                    restore_index = min(current_index, max_index) if max_index >= 0 else 0
+                    self._list.index = restore_index
+                except (AttributeError, ValueError, IndexError):
+                    log(f"Failed to restore list index to {current_index}")
+
+        except (OSError, RuntimeError) as e:
+            log(f"Failed to refresh file viewer: {e}")
+
+    def on_unmount(self):
+        """Stop observer when leaving the screen."""
+        if self._stop_observer:
+            try:
+                self._stop_observer()
+            except Exception as e:
+                log(f"Failed to stop file observer: {e}")
 
     def on_key(self, event):
         # Preserve only double-"g" go-to-top behavior here; other keys are actions
@@ -262,8 +389,9 @@ class FileViewerScreen(BaseScreen):
     def _update_footer(self):
         """Update footer text with current keyword toggle state."""
         try:
-            from textual.widgets import Footer
             from rich.text import Text
+            from textual.widgets import Footer
+
             footer = self.query_one(Footer)
             footer.update(Text.from_markup(self.get_footer_text()))
         except Exception as e:
@@ -277,10 +405,7 @@ class FileViewerScreen(BaseScreen):
         if self.keyword_highlight_enabled and self._sorted_keywords:
             # Use centralized keyword highlighter with the sorted keywords and color lookup
             content = highlighter.highlight_with_color_lookup(
-                line=content,
-                keywords=self._sorted_keywords,
-                color_lookup=self._keyword_lookup,
-                case_sensitive=False
+                line=content, keywords=self._sorted_keywords, color_lookup=self._keyword_lookup, case_sensitive=False
             )
         if orig_idx == self.line_no:
             content = f"[on grey23]{content}[/on grey23]"

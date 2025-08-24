@@ -14,10 +14,9 @@ import pytest
 @pytest.fixture
 def mock_textual():
     """Mock textual components for testing."""
-    with patch('delta_vision.entry_points.App') as mock_app, \
-         patch('delta_vision.entry_points.MainScreen') as mock_main_screen, \
-         patch('delta_vision.entry_points.register_all_themes') as mock_register:
-
+    with patch('delta_vision.entry_points.App') as mock_app, patch(
+        'delta_vision.entry_points.MainScreen'
+    ) as mock_main_screen, patch('delta_vision.entry_points.register_all_themes') as mock_register:
         mock_app_instance = Mock()
         mock_app.return_value = mock_app_instance
 
@@ -25,13 +24,14 @@ def mock_textual():
             'app': mock_app,
             'app_instance': mock_app_instance,
             'main_screen': mock_main_screen,
-            'register_themes': mock_register
+            'register_themes': mock_register,
         }
 
 
 def test_homeapp_import():
     """Test that HomeApp can be imported successfully."""
     from delta_vision.entry_points import HomeApp
+
     assert HomeApp is not None
 
 
@@ -39,11 +39,7 @@ def test_homeapp_instantiation(mock_textual):
     """Test that HomeApp can be instantiated with parameters."""
     from delta_vision.entry_points import HomeApp
 
-    app = HomeApp(
-        new_folder_path="/test/new",
-        old_folder_path="/test/old",
-        keywords_path="/test/keywords.md"
-    )
+    app = HomeApp(new_folder_path="/test/new", old_folder_path="/test/old", keywords_path="/test/keywords.md")
 
     assert app.new_folder_path == "/test/new"
     assert app.old_folder_path == "/test/old"
@@ -75,11 +71,7 @@ def test_homeapp_registers_themes_during_init(mock_textual):
     from delta_vision.entry_points import HomeApp
 
     # Theme registration should happen during __init__
-    app = HomeApp(
-        new_folder_path="/test/new",
-        old_folder_path="/test/old",
-        keywords_path="/test/keywords.md"
-    )
+    app = HomeApp(new_folder_path="/test/new", old_folder_path="/test/old", keywords_path="/test/keywords.md")
 
     # Verify theme registration was attempted during __init__
     mock_textual['register_themes'].assert_called_once_with(app)
@@ -171,11 +163,7 @@ class TestHomeAppIntegration:
         with tempfile.TemporaryDirectory() as temp_dir:
             from delta_vision.entry_points import HomeApp
 
-            app = HomeApp(
-                new_folder_path=temp_dir,
-                old_folder_path=temp_dir,
-                keywords_path=None
-            )
+            app = HomeApp(new_folder_path=temp_dir, old_folder_path=temp_dir, keywords_path=None)
 
             assert app.new_folder_path == temp_dir
             assert app.old_folder_path == temp_dir
@@ -197,6 +185,7 @@ class TestHomeAppIntegration:
 def test_entry_points_main_function_exists():
     """Test that main function still exists and is callable."""
     from delta_vision.entry_points import main
+
     assert callable(main)
 
 

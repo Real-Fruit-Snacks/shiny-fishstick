@@ -121,7 +121,13 @@ class ScreenNavigator:
         except Exception as e:
             log.error(f"Failed to open Compare screen: {e}")
 
-    def open_file_viewer(self, file_path: str, line_no: int | None = None, keywords_path: str | None = None, keywords_enabled: bool = False) -> None:
+    def open_file_viewer(
+        self,
+        file_path: str,
+        line_no: int | None = None,
+        keywords_path: str | None = None,
+        keywords_enabled: bool = False,
+    ) -> None:
         """Open the File Viewer screen for a specific file.
 
         Args:
@@ -133,7 +139,9 @@ class ScreenNavigator:
         try:
             from delta_vision.screens.file_viewer import FileViewerScreen
 
-            viewer = FileViewerScreen(file_path, line_no, keywords_path=keywords_path, keywords_enabled=keywords_enabled)
+            viewer = FileViewerScreen(
+                file_path, line_no, keywords_path=keywords_path, keywords_enabled=keywords_enabled
+            )
             self.app.push_screen(viewer)
         except ImportError as e:
             log.error(f"Failed to import FileViewerScreen: {e}")

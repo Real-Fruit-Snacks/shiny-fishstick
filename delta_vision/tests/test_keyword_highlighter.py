@@ -19,10 +19,7 @@ class TestKeywordHighlighter:
     def test_get_pattern_and_lookup_basic(self):
         """Test basic pattern generation and lookup."""
         highlighter = KeywordHighlighter()
-        keywords_dict = {
-            "Security": ("red", ["malware", "virus"]),
-            "Network": ("blue", ["tcp", "udp"])
-        }
+        keywords_dict = {"Security": ("red", ["malware", "virus"]), "Network": ("blue", ["tcp", "udp"])}
 
         pattern, lookup = highlighter.get_pattern_and_lookup(keywords_dict)
 
@@ -32,15 +29,13 @@ class TestKeywordHighlighter:
             "malware": ("red", "Security"),
             "virus": ("red", "Security"),
             "tcp": ("blue", "Network"),
-            "udp": ("blue", "Network")
+            "udp": ("blue", "Network"),
         }
 
     def test_get_pattern_caching(self):
         """Test that patterns are cached properly."""
         highlighter = KeywordHighlighter()
-        keywords_dict = {
-            "Security": ("red", ["malware", "virus"])
-        }
+        keywords_dict = {"Security": ("red", ["malware", "virus"])}
 
         pattern1, lookup1 = highlighter.get_pattern_and_lookup(keywords_dict)
         pattern2, lookup2 = highlighter.get_pattern_and_lookup(keywords_dict)
@@ -52,12 +47,8 @@ class TestKeywordHighlighter:
     def test_get_pattern_cache_invalidation(self):
         """Test that cache is invalidated when keywords change."""
         highlighter = KeywordHighlighter()
-        keywords_dict1 = {
-            "Security": ("red", ["malware"])
-        }
-        keywords_dict2 = {
-            "Security": ("red", ["virus"])
-        }
+        keywords_dict1 = {"Security": ("red", ["malware"])}
+        keywords_dict2 = {"Security": ("red", ["virus"])}
 
         pattern1, lookup1 = highlighter.get_pattern_and_lookup(keywords_dict1)
         pattern2, lookup2 = highlighter.get_pattern_and_lookup(keywords_dict2)
@@ -77,9 +68,7 @@ class TestKeywordHighlighter:
     def test_highlight_line_basic(self):
         """Test basic line highlighting."""
         highlighter = KeywordHighlighter()
-        keywords_dict = {
-            "Security": ("red", ["malware"])
-        }
+        keywords_dict = {"Security": ("red", ["malware"])}
         pattern, lookup = highlighter.get_pattern_and_lookup(keywords_dict)
 
         result = highlighter.highlight_line("Found malware in file", pattern, lookup)
@@ -91,9 +80,7 @@ class TestKeywordHighlighter:
     def test_highlight_line_no_underline(self):
         """Test line highlighting without underline."""
         highlighter = KeywordHighlighter()
-        keywords_dict = {
-            "Security": ("red", ["malware"])
-        }
+        keywords_dict = {"Security": ("red", ["malware"])}
         pattern, lookup = highlighter.get_pattern_and_lookup(keywords_dict)
 
         result = highlighter.highlight_line("Found malware in file", pattern, lookup, underline=False)
@@ -105,9 +92,7 @@ class TestKeywordHighlighter:
     def test_highlight_line_case_insensitive(self):
         """Test case insensitive highlighting."""
         highlighter = KeywordHighlighter()
-        keywords_dict = {
-            "Security": ("red", ["malware"])
-        }
+        keywords_dict = {"Security": ("red", ["malware"])}
         pattern, lookup = highlighter.get_pattern_and_lookup(keywords_dict)
 
         result = highlighter.highlight_line("Found MALWARE in file", pattern, lookup)
@@ -117,10 +102,7 @@ class TestKeywordHighlighter:
     def test_highlight_line_multiple_matches(self):
         """Test highlighting multiple keywords in one line."""
         highlighter = KeywordHighlighter()
-        keywords_dict = {
-            "Security": ("red", ["malware", "virus"]),
-            "Network": ("blue", ["tcp"])
-        }
+        keywords_dict = {"Security": ("red", ["malware", "virus"]), "Network": ("blue", ["tcp"])}
         pattern, lookup = highlighter.get_pattern_and_lookup(keywords_dict)
 
         result = highlighter.highlight_line("malware uses tcp and virus", pattern, lookup)
@@ -135,9 +117,7 @@ class TestKeywordHighlighter:
         keywords = ["malware", "virus"]
         color_lookup = {"malware": "red", "virus": "orange"}
 
-        result = highlighter.highlight_with_color_lookup(
-            "Found malware and virus", keywords, color_lookup
-        )
+        result = highlighter.highlight_with_color_lookup("Found malware and virus", keywords, color_lookup)
 
         assert "[u][red]malware[/red][/u]" in result
         assert "[u][orange]virus[/orange][/u]" in result
@@ -159,15 +139,11 @@ class TestKeywordHighlighter:
         color_lookup = {"malware": "red"}
 
         # Case insensitive (default)
-        result = highlighter.highlight_with_color_lookup(
-            "Found MALWARE", keywords, color_lookup, case_sensitive=False
-        )
+        result = highlighter.highlight_with_color_lookup("Found MALWARE", keywords, color_lookup, case_sensitive=False)
         assert "[u][red]MALWARE[/red][/u]" in result
 
         # Case sensitive
-        result = highlighter.highlight_with_color_lookup(
-            "Found MALWARE", keywords, color_lookup, case_sensitive=True
-        )
+        result = highlighter.highlight_with_color_lookup("Found MALWARE", keywords, color_lookup, case_sensitive=True)
         assert "[u][red]" not in result  # Should not highlight
 
     def test_highlight_with_pattern_basic(self):
@@ -201,9 +177,7 @@ class TestKeywordHighlighter:
     def test_clear_cache(self):
         """Test cache clearing functionality."""
         highlighter = KeywordHighlighter()
-        keywords_dict = {
-            "Security": ("red", ["malware"])
-        }
+        keywords_dict = {"Security": ("red", ["malware"])}
 
         # Populate cache
         pattern1, lookup1 = highlighter.get_pattern_and_lookup(keywords_dict)
@@ -232,9 +206,7 @@ class TestHighlightKeywordsFunction:
 
     def test_highlight_keywords_convenience(self):
         """Test the convenience function works correctly."""
-        keywords_dict = {
-            "Security": ("red", ["malware"])
-        }
+        keywords_dict = {"Security": ("red", ["malware"])}
 
         result = highlight_keywords("Found malware", keywords_dict)
 
@@ -243,9 +215,7 @@ class TestHighlightKeywordsFunction:
 
     def test_highlight_keywords_no_underline(self):
         """Test convenience function without underline."""
-        keywords_dict = {
-            "Security": ("red", ["malware"])
-        }
+        keywords_dict = {"Security": ("red", ["malware"])}
 
         result = highlight_keywords("Found malware", keywords_dict, underline=False)
 

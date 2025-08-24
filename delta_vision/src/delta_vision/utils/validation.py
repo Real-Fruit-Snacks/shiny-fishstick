@@ -65,7 +65,7 @@ def validate_directory_path(path: str, name: str = "Path", must_exist: bool = Tr
         resolved_path = Path(path).resolve()
         abs_path = str(resolved_path)
     except (OSError, ValueError) as e:
-        raise ValidationError(f"{name} is not a valid path: {e}")
+        raise ValidationError(f"{name} is not a valid path: {e}") from e
 
     # Check path length (reasonable limit)
     if len(abs_path) > 4096:
@@ -136,7 +136,7 @@ def validate_file_path(path: str, name: str = "File", must_exist: bool = True, c
         resolved_path = Path(path).resolve()
         abs_path = str(resolved_path)
     except (OSError, ValueError) as e:
-        raise ValidationError(f"{name} is not a valid path: {e}")
+        raise ValidationError(f"{name} is not a valid path: {e}") from e
 
     # Check path length
     if len(abs_path) > 4096:
@@ -179,8 +179,8 @@ def validate_port(port: int | str, name: str = "Port") -> int:
             raise ValidationError(f"{name} cannot be empty")
         try:
             port = int(port)
-        except ValueError:
-            raise ValidationError(f"{name} must be a number, got: {port}")
+        except ValueError as e:
+            raise ValidationError(f"{name} must be a number, got: {port}") from e
 
     # Validate port range
     if not isinstance(port, int):

@@ -3,15 +3,30 @@
     dock: bottom;
     background: $panel-darken-2;
     border-top: heavy $primary;
-    padding: 0 0;
+    padding: 0 1;
     text-style: bold;
     align: left middle;
+    height: 1;
+}
+
+/* Individual hotkey sections within footer */
+.hotkey-section {
+    background: transparent;
+    text-style: bold;
+    align: left middle;
+    margin-right: 1;
+    padding: 0 1;
+}
+
+/* Hover effect for hotkey sections */
+.hotkey-section:hover {
+    background: $primary-lighten-2;
 }
 #stream-main-scroll {
     overflow: auto;
     width: 100%;
     align: left top;
-    padding: 0 1;
+    padding: 0;  /* remove padding to maximize space usage */
 }
 /* Stream Page CSS - Modern Panel/Code Look */
 
@@ -33,8 +48,8 @@ Header {
     border: round $primary;
     height: auto;
     background: $panel-darken-2;
-    margin: 0 1 2 1;  /* increased bottom margin for spacing between files */
-    padding: 1;  /* minimal padding around content */
+    margin: 0 1 1 1;  /* reduced bottom margin between files */
+    padding: 0;  /* remove padding to eliminate excess space */
     width: 100%;
     align: left top;
 }
@@ -51,15 +66,16 @@ Header {
     border-bottom: solid $primary;
     width: 100%;
     text-opacity: 100%;
+    padding: 0 1 0 1;  /* minimal horizontal padding only */
+    margin: 0;
     /* Glow effect using lighter background */
 }
 
 .file-content {
     background: $panel-darken-1;
     color: $text;
-    padding: 0 0;
+    padding: 0 1;  /* minimal horizontal padding */
     border: round $accent;
-    margin-top: 0;
-    margin-bottom: 0;
+    margin: 0;  /* remove all margins */
     align: left top;
 }

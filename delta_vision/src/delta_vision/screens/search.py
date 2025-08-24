@@ -32,6 +32,7 @@ from delta_vision.utils.search_engine import (
     validate_folders,
 )
 from delta_vision.utils.table_navigation import TableNavigationHandler
+from delta_vision.utils.watchdog import start_observer
 from delta_vision.widgets.footer import Footer
 
 from .keywords_parser import parse_keywords_md
@@ -92,11 +93,15 @@ class SearchScreen(BaseTableScreen):
         self._keyword_highlighter = KeywordHighlighter()
         self._keywords_dict = self._load_keywords_dict()
 
-    def on_mount(self) -> None:
-        """Setup initial state when screen mounts."""
-        super().on_mount()
-        # Store the current theme to detect changes
-        self._current_theme = self.app.theme if self.app else None
+        # Watchdog observers for live updates
+        self._observer_new = None
+        self._observer_old = None
+        self._stop_new = None
+        self._stop_old = None
+        # Track if search results need refreshing due to file changes
+        self._files_changed = False
+        # Track last search query to detect if user has modified it
+        self._last_search_query = ""
 
     def check_idle(self) -> None:
         """Check for theme changes during idle periods and refresh highlighting if needed."""
@@ -105,7 +110,7 @@ class SearchScreen(BaseTableScreen):
         except Exception:
             # Safely handle cases where there's no active app context
             return
-        
+
         # Check if the theme has changed since last check
         try:
             if self.app:
@@ -130,17 +135,17 @@ class SearchScreen(BaseTableScreen):
                     folders.append(self.new_folder_path)
                 if self.old_folder_path:
                     folders.append(self.old_folder_path)
-                
+
                 # Store current cursor position
                 current_cursor = self._table.cursor_row
-                
+
                 # Re-populate the results table with new theme-aware highlighting
                 self._populate_results_table(self._last_results, folders)
-                
+
                 # Restore cursor position
                 if current_cursor is not None and current_cursor < self._table.row_count:
                     self._table.cursor_row = current_cursor
-                
+
             except (AttributeError, RuntimeError) as e:
                 log(f"[SEARCH] Failed to refresh highlighting after theme change: {e}")
 
@@ -194,11 +199,97 @@ class SearchScreen(BaseTableScreen):
     # no helper needed for variant; set explicit literals when toggling
 
     async def on_mount(self):
-        """Initialize state after mounting and set focus on input."""
+        """Initialize state after mounting, set focus on input, and setup theme detection."""
         await super().on_mount()  # This handles table setup and title
+
+        # Store the current theme to detect changes
+        self._current_theme = self.app.theme if self.app else None
+
+        # Start watchdog observers for live updates
+        self._start_folder_observers()
+
         if self._input:
             self.safe_set_focus(self._input)
 
+    def _start_folder_observers(self):
+        """Start file system observers for both NEW and OLD folders."""
+        def trigger_refresh():
+            """Callback for filesystem changes."""
+            try:
+                # Mark that files have changed
+                self._files_changed = True
+                # Only auto-refresh if user hasn't modified the search query
+                current_query = (self._input.value if self._input else "").strip()
+                if current_query == self._last_search_query and current_query:
+                    self.call_later(self._refresh_search_results)
+                else:
+                    # Update summary to show that files changed
+                    self.call_later(self._update_files_changed_indicator)
+            except Exception as e:
+                log(f"[ERROR] Failed in trigger_refresh: {e}")
+
+        # Start observer for NEW folder
+        try:
+            if self.new_folder_path and os.path.isdir(self.new_folder_path):
+                self._observer_new, self._stop_new = start_observer(
+                    self.new_folder_path, trigger_refresh, debounce_ms=1000
+                )
+        except (OSError, RuntimeError) as e:
+            log(f"Failed to start observer for NEW folder {self.new_folder_path}: {e}")
+            self._observer_new = None
+            self._stop_new = None
+
+        # Start observer for OLD folder
+        try:
+            if self.old_folder_path and os.path.isdir(self.old_folder_path):
+                self._observer_old, self._stop_old = start_observer(
+                    self.old_folder_path, trigger_refresh, debounce_ms=1000
+                )
+        except (OSError, RuntimeError) as e:
+            log(f"Failed to start observer for OLD folder {self.old_folder_path}: {e}")
+            self._observer_old = None
+            self._stop_old = None
+
+    def _stop_folder_observers(self):
+        """Stop all file system observers."""
+        for stop_fn in (self._stop_new, self._stop_old):
+            if stop_fn:
+                try:
+                    stop_fn()
+                except Exception as e:
+                    log(f"Failed to stop observer: {e}")
+
+    def _refresh_search_results(self):
+        """Refresh search results when files change, preserving user state."""
+        if not self._last_search_query:
+            return
+
+        # Re-run the last search (run_search handles state preservation internally)
+        self.run_search(self._last_search_query)
+
+        # Mark that we've refreshed
+        self._files_changed = False
+
+    def _update_files_changed_indicator(self):
+        """Update UI to indicate files have changed but search hasn't been refreshed."""
+        if self._files_changed:
+            try:
+                summary = self.query_one('#results-summary', Static)
+                current_text = summary.renderable
+                if isinstance(current_text, Text):
+                    # Add indicator that files have changed
+                    new_text = Text()
+                    new_text.append_text(current_text)
+                    new_text.append(" [dim yellow](Files changed - press Enter to refresh)[/dim yellow]")
+                    summary.update(new_text)
+                elif isinstance(current_text, str) and "(Files changed" not in current_text:
+                    summary.update(f"{current_text} [dim yellow](Files changed - press Enter to refresh)[/dim yellow]")
+            except (AttributeError, RuntimeError) as e:
+                log(f"Failed to update files changed indicator: {e}")
+
+    def on_unmount(self):
+        """Stop observers when leaving the screen."""
+        self._stop_folder_observers()
 
     def action_do_search(self):
         """Run the current query against NEW and OLD and populate results."""
@@ -324,9 +415,7 @@ class SearchScreen(BaseTableScreen):
     def on_key(self, event):
         """Handle key events for table navigation and actions."""
         # Prepare tables dictionary for navigation handler
-        tables = {
-            'results': self._table
-        }
+        tables = {'results': self._table}
 
         # Handle navigation events through the integrated handler
         handled = self._navigation.handle_key_event(
@@ -334,7 +423,7 @@ class SearchScreen(BaseTableScreen):
             self.screen.focused,
             tables,
             enter_callback=self._handle_enter_key,
-            navigation_callback=None  # No special navigation callback needed
+            navigation_callback=None,  # No special navigation callback needed
         )
 
         # Let other events pass through if not handled by navigation
@@ -354,6 +443,11 @@ class SearchScreen(BaseTableScreen):
         if not self._table:
             return
 
+        # Track the search query for live updates
+        self._last_search_query = query
+        # Clear files changed flag since we're running a fresh search
+        self._files_changed = False
+
         prev_key = self._capture_current_selection()
         self._clear_results()
 
@@ -368,7 +462,7 @@ class SearchScreen(BaseTableScreen):
         matches, files_scanned, elapsed = search_result
         self._update_search_summary(matches, query, elapsed, files_scanned)
         self._populate_results_table(matches, folders)
-        
+
         # Extra defensive check before restoration - table might be corrupted in client mode
         if self._table and matches:
             self._restore_selection_and_focus(matches, prev_key)
@@ -571,34 +665,34 @@ class SearchScreen(BaseTableScreen):
         try:
             # Get current theme object
             current_theme = self.app.get_theme(self.app.theme) if self.app else None
-            
+
             if current_theme:
                 # Try theme colors in order of preference for highlighting
                 # Avoid harsh warning/error colors, prefer softer accent/secondary colors
                 candidate_colors = [
-                    current_theme.accent,     # Usually a pleasant accent color
+                    current_theme.accent,  # Usually a pleasant accent color
                     current_theme.secondary,  # Secondary theme color
-                    current_theme.primary,    # Primary theme color
-                    current_theme.success,    # Success color (often green)
-                    current_theme.warning,    # Warning color (yellow/orange) - last resort
+                    current_theme.primary,  # Primary theme color
+                    current_theme.success,  # Success color (often green)
+                    current_theme.warning,  # Warning color (yellow/orange) - last resort
                 ]
-                
+
                 # Find the first color that provides good contrast and aesthetics
                 for bg_color in candidate_colors:
                     if bg_color:
                         # Calculate contrast and pick best text color
                         fg_color = self._get_readable_text_color(bg_color)
-                        
+
                         # Avoid harsh combinations (white text on very bright colors)
                         if self._is_good_highlight_combination(bg_color, fg_color):
                             return f"bold {fg_color} on {bg_color}"
-                
+
                 # If no good combination found, fall back to a softer approach
                 return self._get_fallback_highlight_style(current_theme)
-            
+
         except (AttributeError, ValueError) as e:
             log(f"Failed to get theme colors for highlighting: {e}")
-        
+
         # Ultimate fallback to guaranteed readable style
         return "bold black on yellow"
 
@@ -606,11 +700,11 @@ class SearchScreen(BaseTableScreen):
         """Calculate the most readable text color (black or white) for given background."""
         try:
             luminance = self._get_luminance(bg_hex)
-            
+
             # Use white text on dark backgrounds, black text on light backgrounds
             # Threshold of 0.5 provides good contrast in most cases
             return "#FFFFFF" if luminance < 0.5 else "#000000"
-            
+
         except (ValueError, IndexError) as e:
             log(f"Failed to calculate readable text color for {bg_hex}: {e}")
             # Fallback to black (safe for most yellow/orange backgrounds)
@@ -621,18 +715,18 @@ class SearchScreen(BaseTableScreen):
         try:
             # Get luminance of background color
             bg_luminance = self._get_luminance(bg_color)
-            
+
             # Avoid very bright backgrounds with white text (harsh to read)
             if fg_color == "#FFFFFF" and bg_luminance > 0.7:
                 return False
-                
+
             # Avoid very dark backgrounds with black text (poor contrast)
             if fg_color == "#000000" and bg_luminance < 0.3:
                 return False
-                
+
             # Otherwise it's a good combination
             return True
-            
+
         except (ValueError, IndexError):
             # If we can't determine, assume it's okay
             return True
@@ -642,19 +736,19 @@ class SearchScreen(BaseTableScreen):
         try:
             hex_color = hex_color.lstrip('#')
             r = int(hex_color[0:2], 16) / 255.0
-            g = int(hex_color[2:4], 16) / 255.0  
+            g = int(hex_color[2:4], 16) / 255.0
             b = int(hex_color[4:6], 16) / 255.0
-            
+
             # Gamma correction for sRGB
             def gamma_correct(c):
                 return c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4
-            
+
             r_linear = gamma_correct(r)
             g_linear = gamma_correct(g)
             b_linear = gamma_correct(b)
-            
+
             return 0.2126 * r_linear + 0.7152 * g_linear + 0.0722 * b_linear
-            
+
         except (ValueError, IndexError):
             return 0.5  # Medium luminance fallback
 
@@ -665,9 +759,9 @@ class SearchScreen(BaseTableScreen):
             if getattr(theme, 'dark', True):  # Default to dark theme behavior
                 return "bold #1F2430 on #CCCAC2"  # Dark text on light background
             else:
-                # For light themes, use a subtle dark background with light text  
+                # For light themes, use a subtle dark background with light text
                 return "bold #CCCAC2 on #1F2430"  # Light text on dark background
-                
+
         except (AttributeError, ValueError):
             return "bold black on yellow"  # Ultimate fallback
 
@@ -705,7 +799,7 @@ class SearchScreen(BaseTableScreen):
                 self.safe_set_focus(self._table)
             except Exception as e:
                 log(f"Failed to set focus on table: {e}")
-                
+
         except Exception as e:
             log(f"Failed to restore selection after search: {e}")
 
@@ -728,85 +822,5 @@ class SearchScreen(BaseTableScreen):
         return 0
 
     # --- Actions for help/discoverability ---
-    def action_next_row(self):
-        table = self._table
-        if not table:
-            return
-        try:
-            coord = table.cursor_coordinate
-            cur = getattr(coord, 'row', 0) if coord is not None else 0
-        except (AttributeError, ValueError) as e:
-            log(f"Failed to get current cursor position for next row: {e}")
-            cur = 0
-        try:
-            total = getattr(table, 'row_count', None)
-            if total is None:
-                total = len(getattr(table, 'rows', []))
-        except (AttributeError, ValueError) as e:
-            log(f"Failed to get table row count for next row: {e}")
-            total = 0
-        if total:
-            try:
-                table.move_cursor(row=min(cur + 1, total - 1), column=0)
-                scroll_to_row = getattr(table, 'scroll_to_row', None)
-                if callable(scroll_to_row):
-                    scroll_to_row(min(cur + 1, total - 1))
-                else:
-                    scroll_to_cursor = getattr(table, 'scroll_to_cursor', None)
-                    if callable(scroll_to_cursor):
-                        scroll_to_cursor()
-            except (AttributeError, RuntimeError) as e:
-                log(f"Failed to move to next row: {e}")
-                pass
-        self._last_g = False
 
-    def action_prev_row(self):
-        table = self._table
-        if not table:
-            return
-        try:
-            coord = table.cursor_coordinate
-            cur = getattr(coord, 'row', 0) if coord is not None else 0
-        except (AttributeError, ValueError) as e:
-            log(f"Failed to get current cursor position for previous row: {e}")
-            cur = 0
-        if True:
-            try:
-                table.move_cursor(row=max(cur - 1, 0), column=0)
-                scroll_to_row = getattr(table, 'scroll_to_row', None)
-                if callable(scroll_to_row):
-                    scroll_to_row(max(cur - 1, 0))
-                else:
-                    scroll_to_cursor = getattr(table, 'scroll_to_cursor', None)
-                    if callable(scroll_to_cursor):
-                        scroll_to_cursor()
-            except (AttributeError, RuntimeError) as e:
-                log(f"Failed to move to previous row: {e}")
-                pass
-        self._last_g = False
 
-    def action_end(self):
-        table = self._table
-        if not table:
-            return
-        try:
-            total = getattr(table, 'row_count', None)
-            if total is None:
-                total = len(getattr(table, 'rows', []))
-        except (AttributeError, ValueError) as e:
-            log(f"Failed to get table row count for end action: {e}")
-            total = 0
-        if total:
-            try:
-                table.move_cursor(row=total - 1, column=0)
-                scroll_to_row = getattr(table, 'scroll_to_row', None)
-                if callable(scroll_to_row):
-                    scroll_to_row(total - 1)
-                else:
-                    scroll_to_cursor = getattr(table, 'scroll_to_cursor', None)
-                    if callable(scroll_to_cursor):
-                        scroll_to_cursor()
-            except (AttributeError, RuntimeError) as e:
-                log(f"Failed to move to end row: {e}")
-                pass
-        self._last_g = False

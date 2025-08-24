@@ -52,19 +52,23 @@ def test_no_notes_environment_variables():
     env_vars = []
     for node in ast.walk(tree):
         if isinstance(node, ast.Subscript):
-            if (isinstance(node.value, ast.Attribute) and
-                isinstance(node.value.value, ast.Name) and
-                node.value.value.id == 'os' and
-                node.value.attr == 'environ'):
+            if (
+                isinstance(node.value, ast.Attribute)
+                and isinstance(node.value.value, ast.Name)
+                and node.value.value.id == 'os'
+                and node.value.attr == 'environ'
+            ):
                 if isinstance(node.slice, ast.Constant):
                     env_vars.append(node.slice.value)
         elif isinstance(node, ast.Call):
-            if (isinstance(node.func, ast.Attribute) and
-                isinstance(node.func.value, ast.Attribute) and
-                isinstance(node.func.value.value, ast.Name) and
-                node.func.value.value.id == 'os' and
-                node.func.value.attr == 'environ' and
-                node.func.attr == 'get'):
+            if (
+                isinstance(node.func, ast.Attribute)
+                and isinstance(node.func.value, ast.Attribute)
+                and isinstance(node.func.value.value, ast.Name)
+                and node.func.value.value.id == 'os'
+                and node.func.value.attr == 'environ'
+                and node.func.attr == 'get'
+            ):
                 if node.args and isinstance(node.args[0], ast.Constant):
                     env_vars.append(node.args[0].value)
 
@@ -86,9 +90,7 @@ def test_no_notes_cli_arguments():
     # Look for add_argument calls
     arg_names = []
     for node in ast.walk(tree):
-        if (isinstance(node, ast.Call) and
-            isinstance(node.func, ast.Attribute) and
-            node.func.attr == 'add_argument'):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == 'add_argument':
             if node.args and isinstance(node.args[0], ast.Constant):
                 arg_names.append(node.args[0].value)
 
@@ -147,9 +149,9 @@ def test_server_mode_no_notes_env(mock_start_server, mock_asyncio_run):
             mock_parse.return_value = (mock_args, [])
 
             # Mock validation functions
-            with patch('delta_vision.entry_points.validate_config_paths') as mock_validate_paths, \
-                 patch('delta_vision.entry_points.validate_network_config') as mock_validate_network:
-
+            with patch('delta_vision.entry_points.validate_config_paths') as mock_validate_paths, patch(
+                'delta_vision.entry_points.validate_network_config'
+            ) as mock_validate_network:
                 mock_validate_paths.return_value = ("/test/new", "/test/old", "/test/keywords.md")
                 mock_validate_network.return_value = ("localhost", 8765)
 
@@ -213,12 +215,14 @@ def test_main_screen_no_notes_references():
         source = inspect.getsource(MainScreen)
 
         # Check for notes references (case insensitive)
-        notes_lines = [line.strip() for line in source.split('\n')
-                      if 'notes' in line.lower() and not line.strip().startswith('#')]
+        notes_lines = [
+            line.strip() for line in source.split('\n') if 'notes' in line.lower() and not line.strip().startswith('#')
+        ]
 
         # Filter out comments and docstrings
-        actual_notes_refs = [line for line in notes_lines
-                           if not ('"""' in line or "'''" in line or line.strip().startswith('*'))]
+        actual_notes_refs = [
+            line for line in notes_lines if not ('"""' in line or "'''" in line or line.strip().startswith('*'))
+        ]
 
         assert len(actual_notes_refs) == 0, f"Found notes references in MainScreen: {actual_notes_refs}"
 

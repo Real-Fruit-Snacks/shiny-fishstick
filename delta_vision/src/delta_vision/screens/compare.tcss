@@ -1,0 +1,74 @@
+# Compare screen styling to match Diff screen appearance
+# Rich, polished styling that matches the theme
+
+/* Overall screen styling */
+Screen {
+    background: $surface-darken-3;
+    color: $text;
+}
+
+/* Header styling to match other screens */
+Header {
+    dock: top;
+    background: $panel-darken-2;
+    border-bottom: heavy $primary;
+    padding: 0 1;
+    text-style: bold;
+}
+
+/* Root container with proper theming */
+#compare-root {
+    height: 1fr;
+    padding: 0 1;
+    background: $surface-darken-3;
+}
+
+/* Table styled as a rich panel like Diff screen */
+#compare-table {
+    height: 1fr;
+    border: round $primary;
+    background: $panel-darken-2;
+    padding: 0 1;
+}
+
+/* Enhanced DataTable styling to match theme */
+DataTable {
+    background: $panel-darken-1;
+    color: $text;
+    border: round $accent;
+    scrollbar-background: $panel;
+    scrollbar-color: $accent;
+    scrollbar-color-hover: $primary;
+}
+
+/* Table header styling */
+DataTable > .datatable--header {
+    background: $panel-darken-2;
+    color: $primary;
+    text-style: bold;
+    border-bottom: heavy $primary;
+}
+
+/* Table cursor (selected row) styling */
+DataTable > .datatable--cursor {
+    background: $primary 30%;
+    color: $text;
+}
+
+/* Alternating row colors for readability */
+DataTable > .datatable--odd-row {
+    background: $surface;
+}
+
+DataTable > .datatable--even-row {
+    background: $panel-darken-1;
+}
+
+/* Footer styling to match other screens */
+.footer {
+    dock: bottom;
+    background: $panel-darken-2;
+    border-top: heavy $primary;
+    padding: 0 1;
+    text-style: bold;
+}

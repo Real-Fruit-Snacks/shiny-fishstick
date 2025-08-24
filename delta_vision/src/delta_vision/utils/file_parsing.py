@@ -154,8 +154,8 @@ def parse_header_metadata(file_path: str) -> Optional[dict[str, Optional[str]]]:
     # Try multiple header patterns
     patterns = [
         r"^\s*(\d{8})[ T](\d{6})\s+\"([^\"]+)\"",  # YYYYMMDD HHMMSS "cmd" or YYYYMMDDTHHMMSS "cmd"
-        r"^\s*(\d{8})T(\d{6})\s+\"([^\"]+)\"",    # YYYYMMDDTHHMMSS "cmd"
-        r"^\s*(\d{8})\s+\"([^\"]+)\"",            # YYYYMMDD "cmd"
+        r"^\s*(\d{8})T(\d{6})\s+\"([^\"]+)\"",  # YYYYMMDDTHHMMSS "cmd"
+        r"^\s*(\d{8})\s+\"([^\"]+)\"",  # YYYYMMDD "cmd"
     ]
 
     for pattern in patterns:

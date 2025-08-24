@@ -5,7 +5,6 @@ to ensure they properly prevent path traversal, validate ports/hostnames,
 and handle edge cases correctly.
 """
 
-
 import pytest
 
 from delta_vision.utils.validation import (
@@ -223,9 +222,7 @@ class TestValidateConfigPaths:
         old_dir.mkdir()
         keywords_file.write_text("# Test\nkeyword")
 
-        new_path, old_path, kw_path = validate_config_paths(
-            str(new_dir), str(old_dir), str(keywords_file)
-        )
+        new_path, old_path, kw_path = validate_config_paths(str(new_dir), str(old_dir), str(keywords_file))
 
         assert new_path == str(new_dir.resolve())
         assert old_path == str(old_dir.resolve())

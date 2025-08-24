@@ -40,6 +40,7 @@ async def handle_client(websocket, *, child_env: Optional[Dict[str, str]] = None
         # Cleanup process and PTY resources
         _cleanup_process_and_pty(master_fd, proc, addr)
 
+
 def _setup_pty_and_process(
     child_env: Optional[Dict[str, str]], addr: Optional[str | tuple]
 ) -> Tuple[int, subprocess.Popen]:
@@ -78,6 +79,7 @@ def _setup_pty_and_process(
 
     return master_fd, proc
 
+
 def _configure_child_environment(child_env: Optional[Dict[str, str]]) -> Dict[str, str]:
     """Configure environment variables for child process."""
     # Merge DELTA_* env so server can pass --new/--old/--keywords via env
@@ -97,6 +99,7 @@ def _configure_child_environment(child_env: Optional[Dict[str, str]]) -> Dict[st
                 env[str(k)] = str(v)
 
     return env
+
 
 def _create_io_handlers(websocket, master_fd: int, proc: subprocess.Popen, loop) -> Dict[str, any]:
     """Create async I/O handler functions for PTY communication."""
@@ -153,10 +156,8 @@ def _create_io_handlers(websocket, master_fd: int, proc: subprocess.Popen, loop)
                 log(f"[ERROR] Failed to write data to PTY: {e}")
             raise
 
-    return {
-        'pty_to_ws': pty_to_ws,
-        'ws_to_pty': ws_to_pty
-    }
+    return {'pty_to_ws': pty_to_ws, 'ws_to_pty': ws_to_pty}
+
 
 def _handle_resize_message(message: str, master_fd: int, proc: subprocess.Popen):
     """Handle terminal resize message from WebSocket client."""
@@ -169,6 +170,7 @@ def _handle_resize_message(message: str, master_fd: int, proc: subprocess.Popen)
         os.killpg(os.getpgid(proc.pid), signal.SIGWINCH)
     except (OSError, ProcessLookupError, ValueError) as e:
         log(f"[ERROR] Failed to send SIGWINCH to process group: {e}")
+
 
 async def _coordinate_pty_tasks(handlers: Dict[str, any]):
     """Coordinate PTY I/O tasks until completion."""
@@ -190,6 +192,7 @@ async def _coordinate_pty_tasks(handlers: Dict[str, any]):
             log(f"[server] PTY task coordination failed: {e}")
         # Don't re-raise to prevent traceback spam
 
+
 def _cleanup_process_and_pty(master_fd: int, proc: subprocess.Popen, addr: Optional[str | tuple]):
     """Cleanup PTY file descriptor and terminate child process."""
     # Close master PTY
@@ -206,6 +209,7 @@ def _cleanup_process_and_pty(master_fd: int, proc: subprocess.Popen, addr: Optio
         ACTIVE_CHILDREN.discard(proc)
     except Exception as e:
         log(f"[ERROR] Failed to remove process from active children set: {e}")
+
 
 def _terminate_child_process(proc: subprocess.Popen, addr: Optional[str | tuple]):
     """Terminate child process with graceful then forceful approach."""

@@ -22,11 +22,12 @@ from textual.widgets import Static, Tab, Tabs
 
 from delta_vision.utils.base_screen import BaseScreen
 from delta_vision.utils.config import config
-from delta_vision.utils.diff_engine import compute_diff_rows
+from delta_vision.utils.diff_engine import DiffRow, DiffType, compute_diff_rows
 from delta_vision.utils.file_parsing import parse_header_metadata, read_file_pair
 from delta_vision.utils.fs import format_mtime, get_mtime, minutes_between
 from delta_vision.utils.logger import log
 from delta_vision.utils.text import make_keyword_pattern
+from delta_vision.utils.watchdog import start_observer
 
 from .keywords_parser import parse_keywords_md
 
@@ -110,6 +111,14 @@ class SideBySideDiffScreen(BaseScreen):
         # Filesystem modified timestamps (formatted)
         self._old_created = None
         self._new_created = None
+        # Watchdog observers for live updates
+        self._observer_old = None
+        self._observer_new = None
+        self._stop_old = None
+        self._stop_new = None
+        # Store scroll positions for state preservation
+        self._left_scroll_y = 0
+        self._right_scroll_y = 0
 
     def compose_main_content(self) -> ComposeResult:
         """Build tabs and two file panels for side-by-side diff.
@@ -216,10 +225,96 @@ class SideBySideDiffScreen(BaseScreen):
             self._left_content = None
             self._right_content = None
 
+        # Start watchdog observers for live updates
+        self._start_file_observers()
+
+    def _start_file_observers(self):
+        """Start file system observers for both files."""
+        def trigger_refresh():
+            """Callback for filesystem changes."""
+            try:
+                self.call_later(self.refresh_diff)
+            except Exception as e:
+                log(f"[ERROR] Failed in trigger_refresh: {e}")
+
+        # Start observer for old file
+        try:
+            if self.old_path and os.path.isfile(self.old_path):
+                self._observer_old, self._stop_old = start_observer(
+                    os.path.dirname(self.old_path), trigger_refresh, debounce_ms=500
+                )
+        except (OSError, RuntimeError) as e:
+            log(f"Failed to start observer for old file: {e}")
+            self._observer_old = None
+            self._stop_old = None
+
+        # Start observer for new file
+        try:
+            if self.new_path and os.path.isfile(self.new_path):
+                self._observer_new, self._stop_new = start_observer(
+                    os.path.dirname(self.new_path), trigger_refresh, debounce_ms=500
+                )
+        except (OSError, RuntimeError) as e:
+            log(f"Failed to start observer for new file: {e}")
+            self._observer_new = None
+            self._stop_new = None
+
+    def _stop_file_observers(self):
+        """Stop all file system observers."""
+        for stop_fn in (self._stop_old, self._stop_new):
+            if stop_fn:
+                try:
+                    stop_fn()
+                except Exception as e:
+                    log(f"Failed to stop observer: {e}")
+
+    def refresh_diff(self):
+        """Refresh the diff view when files change."""
+        # Store current scroll positions
+        try:
+            if self._left_content:
+                self._left_scroll_y = getattr(self._left_content, 'scroll_y', 0)
+            if self._right_content:
+                self._right_scroll_y = getattr(self._right_content, 'scroll_y', 0)
+        except (AttributeError, RuntimeError):
+            log("Failed to capture scroll positions")
+
+        # Re-read files and rebuild diff
+        try:
+            # Use current tab's file pair
+            if self._active_tab_id and self._active_tab_id in self._tab_map:
+                pair = self._tab_map[self._active_tab_id]
+                self._set_pair_and_populate(pair[0], pair[1])
+            else:
+                # Fallback to original pair
+                old_lines, new_lines = read_file_pair(self.old_path, self.new_path)
+                rows = compute_diff_rows(old_lines, new_lines)
+                self._rows_cache = rows
+                self._populate(rows)
+
+            # Restore scroll positions
+            self._restore_scroll_positions()
+        except (OSError, RuntimeError) as e:
+            log(f"Failed to refresh diff: {e}")
+
+    def _restore_scroll_positions(self):
+        """Restore saved scroll positions after refresh."""
+        try:
+            if self._left_content and self._left_scroll_y:
+                self._left_content.scroll_to(y=self._left_scroll_y, animate=False)
+            if self._right_content and self._right_scroll_y:
+                self._right_content.scroll_to(y=self._right_scroll_y, animate=False)
+        except (AttributeError, RuntimeError):
+            log("Failed to restore scroll positions")
+
+    def on_unmount(self):
+        """Stop observers when leaving the screen."""
+        self._stop_file_observers()
+
     def _build_tabs_and_select_default(self):
-        """Create tabs for latest vs OLD and latest vs each prior NEW occurrence."""
+        """Create tabs for latest NEW vs all occurrences (older NEW + all OLD files)."""
         # Find latest file and all occurrences
-        latest_new, others = self._find_latest_and_others()
+        latest_new, other_new_files, old_files = self._find_latest_and_others()
 
         # Prepare tab system
         tabs = self._prepare_tab_system()
@@ -227,34 +322,42 @@ class SideBySideDiffScreen(BaseScreen):
             return
 
         # Build all tabs
-        default_tab_id = self._build_all_tabs(tabs, latest_new, others)
+        default_tab_id = self._build_all_tabs(tabs, latest_new, other_new_files, old_files)
 
         # Select default tab and populate content
         self._select_default_tab_and_populate(default_tab_id, latest_new)
 
-    def _find_latest_and_others(self) -> tuple[str, list[str]]:
-        """Find the latest file and other occurrences for tab creation.
+    def _find_latest_and_others(self) -> tuple[str, list[str], list[str]]:
+        """Find the latest file and all occurrences for tab creation.
 
         Returns:
-            Tuple of (latest_new_path, other_occurrence_paths)
+            Tuple of (latest_new_path, other_new_files, old_files)
         """
-        # Determine the command and folder to search
+        # Determine the command and find latest NEW file
         latest_new = self._newest_for_command(self.new_path)
         if latest_new is None:
             latest_new = self.new_path
 
         meta0 = parse_header_metadata(latest_new) if latest_new else None
         cmd = meta0.get("cmd") if isinstance(meta0, dict) else None
-        folder = os.path.dirname(latest_new) if latest_new else None
-        occurrences: list[str] = []
-        if cmd and folder and os.path.isdir(folder):
-            occurrences = self._find_occurrences(folder, cmd)
 
-        # Ensure the absolute newest appears as the baseline; other occurrences
+        # Find all NEW occurrences
+        new_folder = os.path.dirname(latest_new) if latest_new else None
+        new_occurrences: list[str] = []
+        if cmd and new_folder and os.path.isdir(new_folder):
+            new_occurrences = self._find_occurrences(new_folder, cmd)
+
+        # Find all OLD occurrences
+        old_folder = os.path.dirname(self.old_path) if self.old_path else None
+        old_occurrences: list[str] = []
+        if cmd and old_folder and os.path.isdir(old_folder):
+            old_occurrences = self._find_occurrences(old_folder, cmd)
+
+        # Ensure the absolute newest NEW appears as the baseline; other NEW occurrences
         # (older NEWs) become additional tabs for comparison.
-        others = [p for p in occurrences if p != latest_new]
+        other_new_files = [p for p in new_occurrences if p != latest_new]
 
-        return latest_new, others
+        return latest_new, other_new_files, old_occurrences
 
     def _prepare_tab_system(self):
         """Prepare the tab system by clearing existing tabs and resetting state.
@@ -282,13 +385,14 @@ class SideBySideDiffScreen(BaseScreen):
 
         return tabs
 
-    def _build_all_tabs(self, tabs, latest_new: str, others: list[str]) -> str | None:
-        """Build all tabs (prior NEW, OLD, fallback) and return default tab ID.
+    def _build_all_tabs(self, tabs, latest_new: str, other_new_files: list[str], old_files: list[str]) -> str | None:
+        """Build all tabs (prior NEW, all OLD, fallback) and return default tab ID.
 
         Args:
             tabs: The tabs widget
             latest_new: Path to the latest NEW file
-            others: List of other occurrence paths
+            other_new_files: List of other NEW file paths
+            old_files: List of all OLD file paths
 
         Returns:
             The default tab ID to select, or None if no tabs were created
@@ -296,23 +400,25 @@ class SideBySideDiffScreen(BaseScreen):
         default_tab_id: str | None = None
 
         # Add prior NEW comparisons first (2nd newest, 3rd newest, ...)
-        default_tab_id = self._add_prior_new_tabs(tabs, latest_new, others, default_tab_id)
+        default_tab_id = self._add_prior_new_tabs(tabs, latest_new, other_new_files, default_tab_id)
 
-        # Add OLD comparison tab
-        default_tab_id = self._add_old_tab(tabs, latest_new, default_tab_id)
+        # Add OLD comparison tabs (one for each OLD file)
+        default_tab_id = self._add_old_tabs(tabs, latest_new, old_files, default_tab_id)
 
         # Add fallback tab if needed
         default_tab_id = self._add_fallback_tab(tabs, latest_new, default_tab_id)
 
         return default_tab_id
 
-    def _add_prior_new_tabs(self, tabs, latest_new: str, others: list[str], default_tab_id: str | None) -> str | None:
+    def _add_prior_new_tabs(
+        self, tabs, latest_new: str, other_new_files: list[str], default_tab_id: str | None
+    ) -> str | None:
         """Add tabs for prior NEW file comparisons.
 
         Returns:
             The updated default_tab_id (first tab added if none set yet)
         """
-        for idx, other in enumerate(others, start=1):
+        for idx, other in enumerate(other_new_files, start=1):
             # Directional minutes with sign: floor((latest - other)/60)
             # A negative value means "older than latest".
             mins = None
@@ -336,19 +442,56 @@ class SideBySideDiffScreen(BaseScreen):
 
         return default_tab_id
 
-    def _add_old_tab(self, tabs, latest_new: str, default_tab_id: str | None) -> str | None:
-        """Add OLD comparison tab if OLD path exists.
+    def _add_old_tabs(self, tabs, latest_new: str, old_files: list[str], default_tab_id: str | None) -> str | None:
+        """Add OLD comparison tabs for all OLD files.
 
         Returns:
-            The updated default_tab_id (OLD tab if none set yet)
+            The updated default_tab_id (first OLD tab if none set yet)
         """
-        # Add OLD comparison last (if present)
-        # Note: add even if the file may be missing to avoid an empty Tabs bar; content will show an error
-        if self.old_path:
-            tab_id = "old"
-            tabs.add_tab(Tab("OLD", id=tab_id))
-            self._tab_map[tab_id] = (self.old_path, latest_new)
+        if not old_files:
+            return default_tab_id
+
+        for idx, old_file in enumerate(old_files):
+            # Calculate time difference for labeling
+            mins = None
+            try:
+                t_latest = get_mtime(latest_new)
+                t_old = get_mtime(old_file)
+                if t_latest is not None and t_old is not None:
+                    # OLD files are typically older, so this will be positive
+                    mins = math.floor((t_latest - t_old) / 60.0)
+            except (OSError, ValueError):
+                log(f"Failed to calculate time difference between {latest_new} and {old_file}")
+                mins = None
+
+            # Create tab label
+            if len(old_files) == 1:
+                # Single OLD file - just call it "OLD"
+                label = "OLD"
+                tab_id = "old"
+            else:
+                # Multiple OLD files - distinguish them by time or index
+                if mins is not None and mins > 0:
+                    # Show age relative to latest NEW (e.g., "OLD+2h" means OLD is 2 hours older)
+                    if mins < 60:
+                        label = f"OLD+{mins}m"
+                    elif mins < 1440:  # less than 24 hours
+                        hours = mins // 60
+                        label = f"OLD+{hours}h"
+                    else:  # 24+ hours
+                        days = mins // 1440
+                        label = f"OLD+{days}d"
+                else:
+                    # Fallback to index-based naming
+                    label = "OLD" if idx == 0 else f"OLD-{idx}"
+                tab_id = f"old{idx}"
+
+            # Create the tab
+            tabs.add_tab(Tab(label, id=tab_id))
+            self._tab_map[tab_id] = (old_file, latest_new)
             self._tab_order.append(tab_id)
+
+            # Set first OLD tab as default if none set yet
             if default_tab_id is None:
                 default_tab_id = tab_id
 
@@ -433,8 +576,13 @@ class SideBySideDiffScreen(BaseScreen):
 
     def _set_pair_and_populate(self, older_path: str, latest_path: str):
         """Set the current paths and repaint panels accordingly."""
+        # Stop existing observers if paths are changing
+        if older_path != self.old_path or latest_path != self.new_path:
+            self._stop_file_observers()
+
         self.old_path = older_path
         self.new_path = latest_path
+
         # Update metadata and repaint
         self._old_meta = parse_header_metadata(self.old_path) or {"date": None, "time": None, "cmd": None}
         self._new_meta = parse_header_metadata(self.new_path) or {"date": None, "time": None, "cmd": None}
@@ -445,6 +593,9 @@ class SideBySideDiffScreen(BaseScreen):
         rows = compute_diff_rows(old_lines, new_lines)
         self._rows_cache = rows
         self._populate(rows)
+
+        # Restart observers for new file paths
+        self._start_file_observers()
 
     def on_tabs_tab_activated(self, event: Tabs.TabActivated):
         """Switch the comparison when a tab is activated by the user."""
@@ -593,8 +744,9 @@ class SideBySideDiffScreen(BaseScreen):
     def _update_footer(self):
         """Update footer text with current highlights toggle state."""
         try:
-            from textual.widgets import Footer
             from rich.text import Text
+            from textual.widgets import Footer
+
             footer = self.query_one(Footer)
             footer.update(Text.from_markup(self.get_footer_text()))
         except Exception as e:
@@ -618,13 +770,11 @@ class SideBySideDiffScreen(BaseScreen):
 
     # Prev/Next file navigation via p/n has been removed per request.
 
-
     def _minutes_between_paths(self, a: str, b: str) -> int | None:
         """Compute absolute minutes difference between two files' timestamps."""
         return minutes_between(a, b)
 
-
-    def _populate(self, rows: list[tuple[int | None, str, int | None, str, str]]):
+    def _populate(self, rows: list[DiffRow]):
         """Render the diff rows into the left/right panels.
 
         Orchestrates the diff rendering process by calling focused helper methods.
@@ -655,6 +805,7 @@ class SideBySideDiffScreen(BaseScreen):
         Returns:
             Tuple of (line_number_formatter, word_diff_function)
         """
+
         def ln(n: int | None) -> str:
             # Straight ASCII pipe as separator
             # For missing lines (None), don't draw the pipe; keep spacing for alignment only.
@@ -733,28 +884,28 @@ class SideBySideDiffScreen(BaseScreen):
         left_lines: list[str] = []
         right_lines: list[str] = []
 
-        for o_ln, o_text, n_ln, n_text, tag in rows:
-            if tag == 'equal':
-                lmk, rmk = word_diff(o_text, n_text)
-                left_lines.append(f"{ln(o_ln)}{lmk}")
-                right_lines.append(f"{ln(n_ln)}{rmk}")
-            elif tag == 'replace':
-                lmk, rmk = word_diff(o_text, n_text)
-                left_lines.append(f"{ln(o_ln)}{lmk}")
-                right_lines.append(f"{ln(n_ln)}{rmk}")
-            elif tag == 'delete':
-                lmk, _ = word_diff(o_text, "")
-                left_lines.append(f"{ln(o_ln)}{lmk}")
-                right_lines.append(f"{ln(n_ln)}")
-            elif tag == 'insert':
-                _, rmk = word_diff("", n_text)
-                left_lines.append(f"{ln(o_ln)}")
-                right_lines.append(f"{ln(n_ln)}{rmk}")
+        for row in rows:
+            if row.diff_type == DiffType.UNCHANGED:
+                lmk, rmk = word_diff(row.left_content, row.right_content)
+                left_lines.append(f"{ln(row.left_line_num)}{lmk}")
+                right_lines.append(f"{ln(row.right_line_num)}{rmk}")
+            elif row.diff_type == DiffType.MODIFIED:
+                lmk, rmk = word_diff(row.left_content, row.right_content)
+                left_lines.append(f"{ln(row.left_line_num)}{lmk}")
+                right_lines.append(f"{ln(row.right_line_num)}{rmk}")
+            elif row.diff_type == DiffType.DELETED:
+                lmk, _ = word_diff(row.left_content, "")
+                left_lines.append(f"{ln(row.left_line_num)}{lmk}")
+                right_lines.append(f"{ln(row.right_line_num)}")
+            elif row.diff_type == DiffType.ADDED:
+                _, rmk = word_diff("", row.right_content)
+                left_lines.append(f"{ln(row.left_line_num)}")
+                right_lines.append(f"{ln(row.right_line_num)}{rmk}")
             else:
                 # Fallback: treat as equal
-                lmk, rmk = word_diff(o_text, n_text)
-                left_lines.append(f"{ln(o_ln)}{lmk}")
-                right_lines.append(f"{ln(n_ln)}{rmk}")
+                lmk, rmk = word_diff(row.left_content, row.right_content)
+                left_lines.append(f"{ln(row.left_line_num)}{lmk}")
+                right_lines.append(f"{ln(row.right_line_num)}{rmk}")
 
         return left_lines, right_lines
 
@@ -792,10 +943,11 @@ class SideBySideDiffScreen(BaseScreen):
         Returns:
             Tuple of (clamped_left_lines, clamped_right_lines)
         """
+
         def clamp_line(s: str) -> str:
             try:
                 if config.max_preview_chars and len(s) > config.max_preview_chars:
-                    return s[:config.max_preview_chars] + " …"
+                    return s[: config.max_preview_chars] + " …"
             except (ValueError, AttributeError):
                 log(f"Failed to clamp line length for: {s[:50]}...")
                 pass

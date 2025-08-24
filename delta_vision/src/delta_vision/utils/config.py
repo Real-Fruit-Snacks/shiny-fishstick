@@ -8,6 +8,7 @@ from .logger import log
 
 class ConfigError(Exception):
     """Configuration validation error."""
+
     pass
 
 

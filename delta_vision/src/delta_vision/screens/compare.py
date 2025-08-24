@@ -13,6 +13,7 @@ from __future__ import annotations
 import os
 import re
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
 
 from rich.text import Text
@@ -55,7 +56,7 @@ class CompareScreen(BaseTableScreen):
         ("G", "end", "End"),
     ]
 
-    CSS_PATH = "search.tcss"  # reuse basic table styling
+    CSS_PATH = "compare.tcss"  # minimal layout-only styling
 
     def __init__(
         self,
@@ -83,12 +84,15 @@ class CompareScreen(BaseTableScreen):
         """Build results table with comparison data."""
         with Vertical(id="compare-root"):
             self._table = DataTable(id="compare-table")
-            # TYPE first, then Command
+            # More professional table layout with additional information
             self._table.add_column(Text("TYPE", justify="center"), key="type", width=6)
-            # Thin visual separators between columns
             self._table.add_column(Text("│", style="dim", justify="center"), key="sep1", width=1)
-            self._table.add_column(Text("Change", justify="center"), key="chg", width=8)
+            self._table.add_column(Text("Status", justify="center"), key="chg", width=8)
             self._table.add_column(Text("│", style="dim", justify="center"), key="sep2", width=1)
+            self._table.add_column(Text("Size", justify="right"), key="size", width=8)
+            self._table.add_column(Text("│", style="dim", justify="center"), key="sep3", width=1)
+            self._table.add_column(Text("Modified", justify="center"), key="time", width=12)
+            self._table.add_column(Text("│", style="dim", justify="center"), key="sep4", width=1)
             self._table.add_column("Command", key="cmd")
             yield self._table
 
@@ -99,7 +103,7 @@ class CompareScreen(BaseTableScreen):
             " [orange1]q[/orange1] Back    "
             "[orange1]Enter[/orange1] View Diff    "
             f"[orange1]f[/orange1] Changes Only: {state}    "
-            "Legend: [green]✓[/green] changed, [orange1]✗[/orange1] same"
+            "Legend: [bold green]◐[/bold green] changed, [dim]◯[/dim] same"
         )
 
     async def on_mount(self) -> None:
@@ -176,7 +180,11 @@ class CompareScreen(BaseTableScreen):
         display_pairs = self._process_and_add_pairs(table, pairs)
         self._display_pairs = display_pairs
         if display_pairs:
-            self._restore_selection_and_focus(table, display_pairs, prev_key)
+            try:
+                self._restore_selection_and_focus(table, display_pairs, prev_key)
+            except Exception as e:
+                log(f"Failed to restore selection after table population: {e}")
+                # Continue without restoring selection - not critical
 
     def _capture_current_selection(self, table) -> tuple[str, str, str] | None:
         """Capture the current table selection for restoration after rebuild."""
@@ -221,57 +229,114 @@ class CompareScreen(BaseTableScreen):
                 continue
 
             # Use symbols: ◐ for changed, ◯ for no change (more subtle and clear)
-            chg_text = Text(
-                "◐" if changed else "◯",
-                style=("bold $success" if changed else "dim $text-muted"),
-                justify="center"
-            )
+            chg_text = Text("◐" if changed else "◯", style=("bold green" if changed else "dim"), justify="center")
+
+            # Get file information for the NEW file (primary file for comparison)
+            size_text = Text(self._format_file_size(p.new_path), justify="right", style="dim")
+            time_text = Text(self._format_timestamp(p.new_path), justify="center", style="dim")
+
+            # Separators
             sep1 = Text("│", style="dim")
             sep2 = Text("│", style="dim")
+            sep3 = Text("│", style="dim")
+            sep4 = Text("│", style="dim")
 
-            # Add row to table
+            # Add row to table with enhanced information
             row_key = (p.new_path, p.old_path, p.kind)
-            self._add_table_row(table, type_text, sep1, chg_text, sep2, cmd_text, row_key)
+            self._add_table_row(
+                table, type_text, sep1, chg_text, sep2, size_text, sep3, time_text, sep4, cmd_text, row_key
+            )
             display_pairs.append(p)
         return display_pairs
+
+    def _format_file_size(self, file_path: str) -> str:
+        """Format file size in human-readable format."""
+        try:
+            size = os.path.getsize(file_path)
+            if size < 1024:
+                return f"{size}B"
+            elif size < 1024 * 1024:
+                return f"{size // 1024}KB"
+            elif size < 1024 * 1024 * 1024:
+                return f"{size // (1024 * 1024)}MB"
+            else:
+                return f"{size // (1024 * 1024 * 1024)}GB"
+        except (OSError, ValueError):
+            return "---"
+
+    def _format_timestamp(self, file_path: str) -> str:
+        """Format file modification time."""
+        try:
+            mtime = os.path.getmtime(file_path)
+            dt = datetime.fromtimestamp(mtime)
+            return dt.strftime("%m/%d %H:%M")
+        except (OSError, ValueError):
+            return "---"
 
     def _type_style(self, kind: str) -> str:
         """Return the style string for a pair type."""
         kind_upper = (kind or "").upper()
         if kind_upper == "DIFF":
-            return "bold $error"  # Use theme's error color (usually red) for differences
+            return "bold red"  # Red for differences
         if kind_upper == "SAME":
-            return "bold $success"  # Use theme's success color for matches
-        return "bold $text"  # Use theme's text color for unknown types
+            return "bold green"  # Green for matches
+        return "bold white"  # White for unknown types
 
     def _add_table_row(
-        self, table: Any, type_text: str, sep1: str, chg_text: str, sep2: str, cmd_text: str, row_key: str
+        self,
+        table: Any,
+        type_text: str,
+        sep1: str,
+        chg_text: str,
+        sep2: str,
+        size_text: str,
+        sep3: str,
+        time_text: str,
+        sep4: str,
+        cmd_text: str,
+        row_key: str,
     ) -> None:
         """Add a row to the table with fallback error handling."""
         try:
-            table.add_row(type_text, sep1, chg_text, sep2, cmd_text, key=row_key)  # type: ignore[call-arg]
+            table.add_row(type_text, sep1, chg_text, sep2, size_text, sep3, time_text, sep4, cmd_text, key=row_key)  # type: ignore[call-arg]
         except (AttributeError, ValueError) as e:
             log(f"Failed to add row with key to table: {e}")
-            table.add_row(type_text, sep1, chg_text, sep2, cmd_text)
+            table.add_row(type_text, sep1, chg_text, sep2, size_text, sep3, time_text, sep4, cmd_text)
 
     def _restore_selection_and_focus(
         self, table: Any, display_pairs: list[Pair], prev_key: tuple[str, str, str] | None
     ) -> None:
         """Restore the previous selection and set focus to the table."""
         try:
+            # Validate table exists and has rows
+            if not table:
+                log("No table available for selection restoration")
+                return
+
+            # Check if table has the required methods
+            if not hasattr(table, 'move_cursor'):
+                log("Table missing move_cursor method")
+                return
+
             # Restore selection by key when possible
             target_row = 0
             if prev_key is not None:
                 target_row = self._find_target_row(table, display_pairs, prev_key)
-            table.move_cursor(row=target_row, column=0)
-            self.set_focus(table)
-        except (AttributeError, ValueError, IndexError) as e:
-            log(f"Failed to set table cursor position: {e}")
-            pass
 
-    def _find_target_row(
-        self, table: Any, display_pairs: list[Pair], prev_key: tuple[str, str, str] | None
-    ) -> int:
+            # Ensure target row is valid
+            if target_row < 0:
+                target_row = 0
+
+            table.move_cursor(row=target_row, column=0)
+            self.safe_set_focus(table)
+
+        except (AttributeError, ValueError, IndexError, RuntimeError) as e:
+            log(f"Failed to restore table selection and focus: {e}")
+        except Exception as e:
+            log(f"Unexpected error in table restoration: {e}")
+            # Don't re-raise - this is not critical functionality
+
+    def _find_target_row(self, table: Any, display_pairs: list[Pair], prev_key: tuple[str, str, str] | None) -> int:
         """Find the target row index to restore selection to."""
         target_row = 0
         try:
@@ -389,19 +454,34 @@ class CompareScreen(BaseTableScreen):
         """Toggle showing only comparisons with changes."""
         try:
             self._changes_only = not self._changes_only
-            footer = self.query_one(Footer)
-            footer.update(Text.from_markup(self.get_footer_text()))
-            self._scan_and_populate()
-        except (AttributeError, RuntimeError) as e:
+
+            # Update footer safely
+            try:
+                footer = self.query_one(Footer)
+                footer.update(Text.from_markup(self.get_footer_text()))
+            except Exception as footer_error:
+                log(f"Failed to update footer during toggle: {footer_error}")
+
+            # Refresh table safely
+            try:
+                self._scan_and_populate()
+            except Exception as scan_error:
+                log(f"Failed to refresh table during toggle: {scan_error}")
+                # Reset the toggle state if refresh failed
+                self._changes_only = not self._changes_only
+
+        except Exception as e:
             log(f"Failed to toggle changes only filter: {e}")
-            pass
+            # Reset state on any error
+            try:
+                self._changes_only = not self._changes_only
+            except Exception:
+                pass  # Ignore any error during state reset
 
     def on_key(self, event: Any) -> None:
         """Handle key events for table navigation and actions."""
         # Prepare tables dictionary for navigation handler
-        tables = {
-            'compare': self._table
-        }
+        tables = {'compare': self._table}
 
         # Handle navigation events through the integrated handler
         handled = self._navigation.handle_key_event(
@@ -409,7 +489,7 @@ class CompareScreen(BaseTableScreen):
             self.screen.focused,
             tables,
             enter_callback=self._handle_enter_key,
-            navigation_callback=None  # No special navigation callback needed
+            navigation_callback=None,  # No special navigation callback needed
         )
 
         # Let other events pass through if not handled by navigation
@@ -449,90 +529,4 @@ class CompareScreen(BaseTableScreen):
             pass
 
     # --- Actions for help/discoverability ---
-    def action_next_row(self) -> None:
-        table = self._table
-        if not table:
-            return
-        try:
-            coord = table.cursor_coordinate
-            cur = getattr(coord, 'row', 0) if coord is not None else 0
-        except (AttributeError, ValueError) as e:
-            log(f"Failed to get current table cursor position: {e}")
-            cur = 0
-        try:
-            total = getattr(table, 'row_count', None)
-            if total is None:
-                total = len(getattr(table, 'rows', []))
-        except (AttributeError, ValueError) as e:
-            log(f"Failed to get table row count: {e}")
-            total = 0
-        if total:
-            try:
-                table.move_cursor(row=min(cur + 1, total - 1), column=0)
-                scroll_to_row = getattr(table, 'scroll_to_row', None)
-                if callable(scroll_to_row):
-                    scroll_to_row(min(cur + 1, total - 1))
-                else:
-                    scroll_to_cursor = getattr(table, 'scroll_to_cursor', None)
-                    if callable(scroll_to_cursor):
-                        scroll_to_cursor()
-            except (AttributeError, RuntimeError) as e:
-                log(f"Failed to move cursor to next row: {e}")
-                pass
 
-    def action_prev_row(self) -> None:
-        table = self._table
-        if not table:
-            return
-        try:
-            coord = table.cursor_coordinate
-            cur = getattr(coord, 'row', 0) if coord is not None else 0
-        except (AttributeError, ValueError) as e:
-            log(f"Failed to get current table cursor position: {e}")
-            cur = 0
-        try:
-            # row_count may not exist on older versions; fallback to rows length
-            total = getattr(table, 'row_count', None)
-            if total is None:
-                total = len(getattr(table, 'rows', []))
-        except (AttributeError, ValueError) as e:
-            log(f"Failed to get table row count: {e}")
-            total = 0
-        if total:
-            try:
-                table.move_cursor(row=max(cur - 1, 0), column=0)
-                scroll_to_row = getattr(table, 'scroll_to_row', None)
-                if callable(scroll_to_row):
-                    scroll_to_row(max(cur - 1, 0))
-                else:
-                    scroll_to_cursor = getattr(table, 'scroll_to_cursor', None)
-                    if callable(scroll_to_cursor):
-                        scroll_to_cursor()
-            except (AttributeError, RuntimeError) as e:
-                log(f"Failed to move cursor to previous row: {e}")
-                pass
-
-    def action_end(self) -> None:
-        table = self._table
-        if not table:
-            return
-        try:
-            total = getattr(table, 'row_count', None)
-            if total is None:
-                total = len(getattr(table, 'rows', []))
-        except (AttributeError, ValueError) as e:
-            log(f"Failed to get table row count: {e}")
-            total = 0
-        if total:
-            try:
-                table.move_cursor(row=total - 1, column=0)
-                scroll_to_row = getattr(table, 'scroll_to_row', None)
-                if callable(scroll_to_row):
-                    scroll_to_row(total - 1)
-                else:
-                    scroll_to_cursor = getattr(table, 'scroll_to_cursor', None)
-                    if callable(scroll_to_cursor):
-                        scroll_to_cursor()
-            except (AttributeError, RuntimeError) as e:
-                log(f"Failed to move cursor to end row: {e}")
-                pass

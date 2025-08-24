@@ -4,33 +4,71 @@ This module provides text comparison functionality using Python's difflib
 to generate line-by-line diff data suitable for UI rendering.
 """
 
+from dataclasses import dataclass
 from difflib import SequenceMatcher
+from enum import Enum
 from typing import Optional
 
-# Type alias for diff row structure
-DiffRow = tuple[Optional[int], str, Optional[int], str, str]
+from .io import safe_read_lines
 
 
-def compute_diff_rows(old_lines: list[str], new_lines: list[str]) -> list[DiffRow]:
-    """Compute diff rows between two sets of lines - orchestrator for diff computation.
+class DiffType(Enum):
+    """Enumeration of diff row types."""
+    UNCHANGED = "equal"
+    ADDED = "insert"
+    DELETED = "delete"
+    MODIFIED = "replace"
+
+
+@dataclass
+class DiffRow:
+    """Represents a single row in a diff comparison."""
+    diff_type: DiffType
+    left_line_num: Optional[int]
+    right_line_num: Optional[int]
+    left_content: str
+    right_content: str
+
+
+def compute_diff_rows(old_input, new_input) -> list[DiffRow]:
+    """Compute diff rows between two file paths or line lists - orchestrator for diff computation.
 
     Args:
-        old_lines: Lines from the old file
-        new_lines: Lines from the new file
+        old_input: Either a file path (str) or list of lines
+        new_input: Either a file path (str) or list of lines
 
     Returns:
-        List of diff rows where each row is a tuple of:
-        (old_line_num, old_text, new_line_num, new_text, tag)
-
-        Tags are: 'equal', 'replace', 'delete', 'insert'
-        Line numbers start at 1 for the first line (header is assumed skipped by caller)
+        List of DiffRow objects representing the comparison
     """
+    # Handle both file paths and line lists
+    old_lines = _get_lines_from_input(old_input)
+    new_lines = _get_lines_from_input(new_input)
+
     state = _initialize_diff_state(old_lines, new_lines)
 
     for opcode in state["matcher"].get_opcodes():
         _process_opcode(opcode, state)
 
     return state["rows"]
+
+
+def _get_lines_from_input(input_data):
+    """Get lines from either file path or list input."""
+    if isinstance(input_data, str):
+        # It's a file path
+        try:
+            result = safe_read_lines(input_data)
+            if result.success:
+                return result.lines
+            else:
+                return []  # Return empty list for failed reads
+        except Exception:
+            return []  # Handle any unexpected errors
+    elif isinstance(input_data, list):
+        # It's already a list of lines
+        return input_data
+    else:
+        return []  # Fallback for unexpected input types
 
 
 def _initialize_diff_state(old_lines: list[str], new_lines: list[str]) -> dict:
@@ -41,7 +79,7 @@ def _initialize_diff_state(old_lines: list[str], new_lines: list[str]) -> dict:
         "old_lines": old_lines,
         "new_lines": new_lines,
         "old_idx": 1,
-        "new_idx": 1
+        "new_idx": 1,
     }
 
 
@@ -95,12 +133,12 @@ def _handle_insert_lines(j1: int, j2: int, state: dict):
 
 def _create_equal_row(old_pos: int, new_pos: int, state: dict) -> DiffRow:
     """Create a row for equal lines."""
-    return (
-        state["old_idx"],
-        state["old_lines"][old_pos],
-        state["new_idx"],
-        state["new_lines"][new_pos],
-        'equal'
+    return DiffRow(
+        diff_type=DiffType.UNCHANGED,
+        left_line_num=state["old_idx"],
+        left_content=state["old_lines"][old_pos],
+        right_line_num=state["new_idx"],
+        right_content=state["new_lines"][new_pos]
     )
 
 
@@ -111,17 +149,35 @@ def _create_replace_row(i1: int, i2: int, j1: int, j2: int, k: int, state: dict)
     o_ln = state["old_idx"] if i1 + k < i2 else None
     n_ln = state["new_idx"] if j1 + k < j2 else None
 
-    return (o_ln, o_text, n_ln, n_text, 'replace')
+    return DiffRow(
+        diff_type=DiffType.MODIFIED,
+        left_line_num=o_ln,
+        left_content=o_text,
+        right_line_num=n_ln,
+        right_content=n_text
+    )
 
 
 def _create_delete_row(old_pos: int, state: dict) -> DiffRow:
     """Create a row for deleted lines."""
-    return (state["old_idx"], state["old_lines"][old_pos], None, "", 'delete')
+    return DiffRow(
+        diff_type=DiffType.DELETED,
+        left_line_num=state["old_idx"],
+        left_content=state["old_lines"][old_pos],
+        right_line_num=None,
+        right_content=""
+    )
 
 
 def _create_insert_row(new_pos: int, state: dict) -> DiffRow:
     """Create a row for inserted lines."""
-    return (None, "", state["new_idx"], state["new_lines"][new_pos], 'insert')
+    return DiffRow(
+        diff_type=DiffType.ADDED,
+        left_line_num=None,
+        left_content="",
+        right_line_num=state["new_idx"],
+        right_content=state["new_lines"][new_pos]
+    )
 
 
 def _increment_both_indices(state: dict):
@@ -146,4 +202,3 @@ def _update_indices_for_replace(i1: int, i2: int, j1: int, j2: int, k: int, stat
         _increment_old_index(state)
     if j1 + k < j2:
         _increment_new_index(state)
-

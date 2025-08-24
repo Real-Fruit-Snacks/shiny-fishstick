@@ -17,6 +17,7 @@ from delta_vision.utils.validation import ValidationError, validate_config_paths
 
 def _ignore_further_interrupts():
     """Install a signal handler that ignores further SIGINT signals."""
+
     def ignore_signal(signum, frame):
         # Silently ignore further interrupts
         pass
@@ -30,7 +31,17 @@ def _ignore_further_interrupts():
 
 class HomeApp(App):
     BINDINGS = []
-    DEFAULT_CSS = ""
+    DEFAULT_CSS = """
+    App {
+        background: $surface-darken-3;
+    }
+
+    Screen {
+        background: $surface-darken-3;
+        width: 100%;
+        height: 100%;
+    }
+    """
 
     @property
     def theme(self):
@@ -48,15 +59,18 @@ class HomeApp(App):
         try:
             # Use the base App class to set the theme properly
             from textual.app import App
+
             App.theme.__set__(self, value or 'textual-dark')
         except (AttributeError, TypeError, ValueError):
             # Fallback to ensure theme is never None
             from textual.app import App
+
             App.theme.__set__(self, 'textual-dark')
         except Exception:
             # Handle InvalidThemeError and other theme-related errors gracefully
             # This ensures theme changes don't crash the app if theme doesn't exist
             from textual.app import App
+
             try:
                 App.theme.__set__(self, 'textual-dark')
             except Exception:

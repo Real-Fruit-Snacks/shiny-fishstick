@@ -20,6 +20,7 @@ from .logger import log
 @dataclass
 class KeywordFileHit:
     """Represents keyword hits in a single file."""
+
     count: int = 0
     first_line_no: int = 0
     first_preview: str = ""
@@ -29,6 +30,7 @@ class KeywordFileHit:
 @dataclass
 class ScanResult:
     """Results from a keyword scan operation."""
+
     summary: dict[str, KeywordFileHit]  # keyword -> aggregated hit info
     file_counts: dict[str, dict[str, dict[str, int]]]  # side -> file_path -> keyword -> count
     file_meta: dict[str, dict[str, tuple]]  # side -> file_path -> (mtime, size)
@@ -87,9 +89,7 @@ class KeywordScanner:
 
         # Start background thread
         self._scan_thread = threading.Thread(
-            target=self._scan_worker,
-            args=(keywords, new_folder, old_folder),
-            daemon=True
+            target=self._scan_worker, args=(keywords, new_folder, old_folder), daemon=True
         )
         self._scan_thread.start()
 
@@ -165,7 +165,7 @@ class KeywordScanner:
             "meta": {},
             "summary": {kw: KeywordFileHit() for kw in keywords},
             "files_scanned": 0,
-            "errors": []
+            "errors": [],
         }
 
     def _validate_folder_path(self, folder_path: str | None) -> bool:
@@ -194,8 +194,7 @@ class KeywordScanner:
 
     def _should_stop_scan(self, result: dict) -> bool:
         """Check if scan should be stopped due to limits or cancellation."""
-        return (self._scan_stop.is_set() or
-                result["files_scanned"] >= self.max_files)
+        return self._scan_stop.is_set() or result["files_scanned"] >= self.max_files
 
     def _scan_files_in_directory(
         self, root: str, files: list[str], pattern: re.Pattern, keywords: list[str], result: dict, seen_paths: set
@@ -223,8 +222,7 @@ class KeywordScanner:
 
     def _should_scan_file(self, file_path: str, seen_paths: set) -> bool:
         """Check if file should be scanned (exists, not duplicate)."""
-        return (os.path.isfile(file_path) and
-                file_path not in seen_paths)
+        return os.path.isfile(file_path) and file_path not in seen_paths
 
     def _update_scan_results(self, file_result: dict, result: dict, file_path: str):
         """Update scan results with file scan results."""
@@ -274,7 +272,7 @@ class KeywordScanner:
             "text": text,
             "counts": {kw: 0 for kw in keywords},
             "first_line": 0,
-            "first_preview": ""
+            "first_preview": "",
         }
 
     def _process_all_lines(self, file_data: dict, pattern: re.Pattern, keywords: list[str]):
@@ -308,7 +306,7 @@ class KeywordScanner:
         """Create a preview string for a line."""
         preview = line.strip()
         if len(preview) > self.max_preview_chars:
-            preview = preview[:self.max_preview_chars] + "…"
+            preview = preview[: self.max_preview_chars] + "…"
         return preview
 
     def _build_scan_result(self, file_data: dict) -> dict | None:
@@ -318,7 +316,7 @@ class KeywordScanner:
                 "counts": file_data["counts"],
                 "meta": file_data["meta"],
                 "first_line": file_data["first_line"],
-                "first_preview": file_data["first_preview"]
+                "first_preview": file_data["first_preview"],
             }
         return None
 

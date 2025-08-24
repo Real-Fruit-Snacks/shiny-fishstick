@@ -16,6 +16,7 @@ from typing import Any, TextIO
 
 class LogLevel(IntEnum):
     """Log severity levels."""
+
     DEBUG = 10
     INFO = 20
     WARN = 30
@@ -79,39 +80,41 @@ class Logger:
         if self._headless_cached is not None:
             return not self._headless_cached
 
+        # In client/server mode, we should be able to write to stdout
+        # Check environment variables to determine if we're in client mode
+        mode = os.environ.get('DELTA_MODE', '').lower()
+        if mode in ('client', 'server'):
+            self._headless_cached = False
+            return True
+
         try:
             from textual.app import App  # lazy import
 
-            app = getattr(App, "app", None)
-            if app is None:
+            # Safely check if there's an active Textual app without creating one
+            # Only check the class attribute, don't call any methods
+            if hasattr(App, '_running_app') and App._running_app is not None:
+                app = App._running_app
+                is_headless = bool(getattr(app, "is_headless", False))
+                self._headless_cached = is_headless
+                return not is_headless
+            else:
+                # No running app, we can write to stdout
                 self._headless_cached = False
                 return True
-
-            is_headless = bool(getattr(app, "is_headless", False))
-            self._headless_cached = is_headless
-            return not is_headless
         except (ImportError, AttributeError, RuntimeError):
-            # If anything is odd, be safe and don't write
+            # If anything is odd, be safe and allow stdout
             self._headless_cached = False
-            return False
+            return True
 
     def _format_message(
-        self,
-        level: LogLevel,
-        message: str,
-        extra: dict | None = None,
-        exc_info: tuple | None = None
+        self, level: LogLevel, message: str, extra: dict | None = None, exc_info: tuple | None = None
     ) -> str:
         """Format a log message with timestamp and level."""
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
         level_name = level.name
 
         # Build base message
-        formatted = self._format_string.format(
-            timestamp=timestamp,
-            level=level_name,
-            message=message
-        )
+        formatted = self._format_string.format(timestamp=timestamp, level=level_name, message=message)
 
         # Add extra context if provided
         if extra:
@@ -120,18 +123,14 @@ class Logger:
         # Add exception info if provided
         if exc_info and exc_info[0] is not None:
             import traceback
+
             exc_str = "".join(traceback.format_exception(*exc_info))
             formatted += f"\n{exc_str}"
 
         return formatted
 
     def _write(
-        self,
-        level: LogLevel,
-        *args: Any,
-        sep: str = " ",
-        extra: dict | None = None,
-        exc_info: tuple | None = None
+        self, level: LogLevel, *args: Any, sep: str = " ", extra: dict | None = None, exc_info: tuple | None = None
     ) -> None:
         """Write a log message at the specified level."""
         # Check if this level should be logged
@@ -156,10 +155,10 @@ class Logger:
             try:
                 # Use color codes for terminal output
                 color_codes = {
-                    LogLevel.DEBUG: "\033[90m",    # Gray
-                    LogLevel.INFO: "\033[0m",       # Default
-                    LogLevel.WARN: "\033[93m",      # Yellow
-                    LogLevel.ERROR: "\033[91m",     # Red
+                    LogLevel.DEBUG: "\033[90m",  # Gray
+                    LogLevel.INFO: "\033[0m",  # Default
+                    LogLevel.WARN: "\033[93m",  # Yellow
+                    LogLevel.ERROR: "\033[91m",  # Red
                     LogLevel.CRITICAL: "\033[95m",  # Magenta
                 }
                 color = color_codes.get(level, "\033[0m")

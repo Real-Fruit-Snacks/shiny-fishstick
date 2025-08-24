@@ -155,7 +155,7 @@ class TestMakeKeywordPattern:
             "question?mark",
             "plus+sign",
             "star*symbol",
-            "caret^symbol"
+            "caret^symbol",
         ]
 
         pattern = make_keyword_pattern(keywords)

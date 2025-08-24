@@ -21,16 +21,14 @@ from typing import Dict, List, Optional, Set, Tuple
 
 from textual.app import ComposeResult
 from textual.containers import Vertical
-from textual.screen import Screen
 from textual.widgets import Static
 
+from delta_vision.utils.base_screen import BaseScreen
 from delta_vision.utils.config import config
 from delta_vision.utils.io import read_text
 from delta_vision.utils.keyword_highlighter import KeywordHighlighter
 from delta_vision.utils.logger import log
 from delta_vision.utils.watchdog import start_observer
-from delta_vision.widgets.footer import Footer
-from delta_vision.widgets.header import Header
 
 from .keywords_parser import parse_keywords_md
 from .watchdog_helper import start_watchdog
@@ -38,7 +36,7 @@ from .watchdog_helper import start_watchdog
 # KeywordProcessor functionality moved to utils/keyword_highlighter.py for reuse across screens
 
 
-class StreamScreen(Screen):
+class StreamScreen(BaseScreen):
     """Live stream of files in a folder with optional keyword filtering.
 
     The screen lists files by oldest-first modification time and updates when
@@ -48,7 +46,7 @@ class StreamScreen(Screen):
 
     # Show keys in Textual help and route to actions
     BINDINGS = [
-        ("q", "go_home", "Back"),
+        ("q", "go_back", "Back"),
         ("j", "scroll_down", "Down"),
         ("k", "scroll_up", "Up"),
         ("G", "scroll_end", "End"),
@@ -76,7 +74,7 @@ class StreamScreen(Screen):
     CSS_PATH = "stream.tcss"
 
     def __init__(self, folder_path=None, keywords_path=None):
-        super().__init__()
+        super().__init__("Stream")
         self.folder_path = folder_path
         self.keywords_path = keywords_path
         self.keywords_dict = None
@@ -94,39 +92,33 @@ class StreamScreen(Screen):
         # Cache for file stat info to avoid duplicate filesystem calls
         self._cached_stats = {}
 
-    def _get_footer_text(self) -> str:
-        """Generate dynamic footer text showing toggle states."""
-        keywords_state = "ON" if self.keyword_filter_enabled else "OFF"
-        anchor_state = "ON" if self._anchor_bottom else "OFF"
-        return (
-            f" [orange1]q[/orange1] Back    "
-            f"[orange1]Ctrl+K[/orange1] Keywords: {keywords_state}    "
-            f"[orange1]Ctrl+A[/orange1] Anchor: {anchor_state}"
-        )
-
     def _update_footer(self):
         """Update footer text with current toggle states."""
         try:
-            footer = self.query_one(Footer)
             from rich.text import Text
-            footer.update(Text.from_markup(self._get_footer_text()))
+            from textual.widgets import Footer
+
+            footer = self.query_one(Footer)
+            footer.update(Text.from_markup(self.get_footer_text()))
         except Exception as e:
             log(f"[ERROR] Failed to update footer: {e}")
 
-    def compose(self) -> ComposeResult:
-        """Build the static layout: header, scrollable body, and footer."""
-        # Declarative layout: Header, scroll container, Footer
-        yield Header(page_name="Stream", show_clock=True)
+    def compose_main_content(self) -> ComposeResult:
+        """Build the main content: scrollable body for file panels."""
         yield Vertical(id="stream-main-scroll")
-        yield Footer(
-            text=self._get_footer_text(),
-            classes="footer-stream",
+
+    def get_footer_text(self) -> str:
+        """Get footer text with current toggle states."""
+        keywords_state = "ON" if self.keyword_filter_enabled else "OFF"
+        anchor_state = "ON" if self._anchor_bottom else "OFF"
+        return (
+            f" [orange1]q[/orange1] Back    [orange1]Ctrl+K[/orange1] Keywords: {keywords_state}    "
+            f"[orange1]Ctrl+A[/orange1] Anchor: {anchor_state}"
         )
 
-    def on_mount(self):
+    async def on_mount(self):
         """Wire up state, start the filesystem observer, and paint initial view."""
-        # Set the screen title so the built-in Header shows it
-        self.title = "Delta Vision — Stream"
+        await super().on_mount()  # Handle BaseScreen setup
         # Grab references to composed widgets
         try:
             self.scroll_container = self.query_one('#stream-main-scroll', Vertical)
@@ -320,8 +312,7 @@ class StreamScreen(Screen):
         return True, sorted(show_lines)
 
     def _process_file_content(
-        self, file_path: str, pattern: Optional[re.Pattern],
-        keyword_lookup: Dict[str, Tuple[str, str]]
+        self, file_path: str, pattern: Optional[re.Pattern], keyword_lookup: Dict[str, Tuple[str, str]]
     ) -> Optional[Tuple[str, str, str, bool]]:
         """Process a file's content for display.
 
@@ -368,7 +359,7 @@ class StreamScreen(Screen):
         truncated = False
         try:
             if config.max_render_lines and len(lines_to_show) > config.max_render_lines:
-                lines_to_show = lines_to_show[:config.max_render_lines]
+                lines_to_show = lines_to_show[: config.max_render_lines]
                 truncated = True
         except Exception as e:
             log(f"[ERROR] Failed to apply line cap: {e}")
@@ -383,8 +374,7 @@ class StreamScreen(Screen):
         return title, command_text, content_with_numbers, truncated
 
     def _update_file_panel(
-        self, file_path: str, title: str, command_text: str,
-        content_with_numbers: str, truncated: bool
+        self, file_path: str, title: str, command_text: str, content_with_numbers: str, truncated: bool
     ) -> Vertical:
         """Update or create a file panel with the given content."""
         panel = self.file_panels.get(file_path)
@@ -498,8 +488,7 @@ class StreamScreen(Screen):
             panel = self.file_panels.get(file_path)
 
             # If unchanged and no filter toggle, reuse existing panel without reread
-            if (not filter_changed and prev_meta is not None and
-                cur_meta == prev_meta and panel is not None):
+            if not filter_changed and prev_meta is not None and cur_meta == prev_meta and panel is not None:
                 new_file_panels[file_path] = panel
                 continue
 

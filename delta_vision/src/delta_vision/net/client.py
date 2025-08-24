@@ -39,9 +39,7 @@ async def start_client(host: str, port: int):
             signal_state = _setup_signal_handlers(terminal_state['is_tty'])
 
             # Create async handler functions
-            handlers = _create_async_handlers(
-                websocket, terminal_state, signal_state
-            )
+            handlers = _create_async_handlers(websocket, terminal_state, signal_state)
 
             # Execute main I/O coordination
             await _coordinate_io_tasks(websocket, handlers, signal_state, terminal_state)
@@ -59,6 +57,7 @@ async def start_client(host: str, port: int):
         if terminal_state and signal_state:
             _cleanup_terminal_state(terminal_state, signal_state)
 
+
 def _setup_terminal_state() -> dict:
     """Setup terminal state and detect TTY capability."""
     fd = sys.stdin.fileno()
@@ -73,16 +72,14 @@ def _setup_terminal_state() -> dict:
         print(f"Warning: Not running in TTY environment: {e}")
         print("Client will connect but terminal features may be limited.")
 
-    return {
-        'fd': fd,
-        'old_attrs': old_attrs,
-        'is_tty': is_tty
-    }
+    return {'fd': fd, 'old_attrs': old_attrs, 'is_tty': is_tty}
+
 
 def _configure_terminal_raw_mode(terminal_state: dict):
     """Configure terminal for raw mode if TTY is available."""
     if terminal_state['is_tty']:
         tty.setraw(terminal_state['fd'])
+
 
 def _setup_signal_handlers(is_tty: bool) -> dict:
     """Setup signal handlers and events for terminal operations."""
@@ -103,8 +100,9 @@ def _setup_signal_handlers(is_tty: bool) -> dict:
         'resize_event': resize_event,
         'stop_event': stop_event,
         'old_winch': old_winch,
-        'on_winch': on_winch
+        'on_winch': on_winch,
     }
+
 
 def _create_async_handlers(websocket, terminal_state: dict, signal_state: dict) -> dict:
     """Create async handler functions for I/O operations."""
@@ -140,9 +138,7 @@ def _create_async_handlers(websocket, terminal_state: dict, signal_state: dict) 
 
             while True:
                 try:
-                    data = await signal_state['loop'].run_in_executor(
-                        None, os.read, terminal_state['fd'], 4096
-                    )
+                    data = await signal_state['loop'].run_in_executor(None, os.read, terminal_state['fd'], 4096)
                     if not data:
                         break
                     # Handle Ctrl+D as a local disconnect; Ctrl+C is passed through
@@ -192,11 +188,8 @@ def _create_async_handlers(websocket, terminal_state: dict, signal_state: dict) 
                 log(f"[client] Failed to forward websocket to stdout: {e}")
             raise
 
-    return {
-        'push_resize': push_resize,
-        'stdin_to_ws': stdin_to_ws,
-        'ws_to_stdout': ws_to_stdout
-    }
+    return {'push_resize': push_resize, 'stdin_to_ws': stdin_to_ws, 'ws_to_stdout': ws_to_stdout}
+
 
 async def _coordinate_io_tasks(websocket, handlers: dict, signal_state: dict, terminal_state: dict):
     """Coordinate all I/O tasks and handle completion."""
@@ -244,16 +237,13 @@ async def _coordinate_io_tasks(websocket, handlers: dict, signal_state: dict, te
         # Terminal cleanup is handled separately
         pass
 
+
 def _cleanup_terminal_state(terminal_state: dict, signal_state: dict):
     """Restore terminal state and signal handlers."""
     # Restore terminal state (only if we had TTY)
     if terminal_state['is_tty'] and terminal_state['old_attrs']:
         try:
-            termios.tcsetattr(
-                terminal_state['fd'],
-                termios.TCSADRAIN,
-                terminal_state['old_attrs']
-            )
+            termios.tcsetattr(terminal_state['fd'], termios.TCSADRAIN, terminal_state['old_attrs'])
         except (termios.error, OSError):
             pass
 

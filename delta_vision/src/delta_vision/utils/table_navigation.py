@@ -19,9 +19,14 @@ class TableNavigationHandler:
     def __init__(self):
         self._last_g = False  # Track 'g' key for 'gg' behavior
 
-    def handle_key_event(self, event, focused_widget, tables: dict[str, DataTable],
-                        enter_callback: Callable[[], None] | None = None,
-                        navigation_callback: Callable[[], None] | None = None) -> bool:
+    def handle_key_event(
+        self,
+        event,
+        focused_widget,
+        tables: dict[str, DataTable],
+        enter_callback: Callable[[], None] | None = None,
+        navigation_callback: Callable[[], None] | None = None,
+    ) -> bool:
         """
         Handle key events for table navigation.
 
@@ -185,9 +190,13 @@ class MultiTableManager:
                 return name
         return None
 
-    def handle_navigation(self, event, focused_widget,
-                         enter_callback: Callable[[], None] | None = None,
-                         navigation_callback: Callable[[], None] | None = None) -> bool:
+    def handle_navigation(
+        self,
+        event,
+        focused_widget,
+        enter_callback: Callable[[], None] | None = None,
+        navigation_callback: Callable[[], None] | None = None,
+    ) -> bool:
         """Handle navigation events across managed tables."""
         return self.navigation_handler.handle_key_event(
             event, focused_widget, self.tables, enter_callback, navigation_callback
@@ -212,7 +221,7 @@ class MultiTableManager:
                     stats[name] = {
                         "current_row": current_row,
                         "total_rows": total_rows,
-                        "has_focus": False  # Will be set by caller
+                        "has_focus": False,  # Will be set by caller
                     }
                 except Exception as e:
                     log(f"Error getting stats for table {name}: {e}")

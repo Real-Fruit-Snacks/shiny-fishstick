@@ -32,7 +32,6 @@ class MainScreen(BaseScreen):
         ("4", "open_compare", "Compare"),
     ]
 
-
     def __init__(self, new_folder_path=None, old_folder_path=None, keywords_path=None):
         super().__init__(page_name="Home")
         self.new_folder_path = new_folder_path
@@ -104,7 +103,6 @@ class MainScreen(BaseScreen):
         await super().on_mount()
         self._navigator = create_navigator(self.app)
 
-
     def get_footer_text(self) -> str:
         return (
             " [orange1]1[/orange1] Stream    "
@@ -154,7 +152,6 @@ class MainScreen(BaseScreen):
                 keywords_path=self.keywords_path,
             )
 
-
     def on_button_pressed(self, event):
         """Route button presses to corresponding action methods to eliminate duplication."""
         button_to_action = {
@@ -167,4 +164,3 @@ class MainScreen(BaseScreen):
         action = button_to_action.get(event.button.id)
         if action:
             action()
-

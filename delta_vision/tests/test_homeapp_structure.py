@@ -143,7 +143,7 @@ def test_imports_moved_to_module_level():
     expected_imports = [
         "delta_vision.screens.main_screen.MainScreen",
         "delta_vision.themes.register_all_themes",
-        "textual.app.App"
+        "textual.app.App",
     ]
 
     for expected in expected_imports:
@@ -197,7 +197,7 @@ def test_validation_imports_present():
         "ValidationError",
         "validate_config_paths",
         "validate_network_config",
-        "validate_port"
+        "validate_port",
     ]
 
     for expected in expected_validation_imports:

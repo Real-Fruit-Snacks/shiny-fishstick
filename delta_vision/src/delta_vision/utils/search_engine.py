@@ -19,6 +19,7 @@ from .logger import log
 @dataclass
 class SearchMatch:
     """Represents a single search match result."""
+
     file_path: str
     line_no: int
     line: str
@@ -29,6 +30,7 @@ class SearchMatch:
 @dataclass
 class SearchConfig:
     """Configuration for search operations."""
+
     max_files: int = 5000
     max_preview_chars: int = 200
     case_sensitive: bool = False
@@ -45,7 +47,9 @@ class SearchEngine:
         """
         self.config = config or SearchConfig()
 
-    def search_folders(self, query: str, folders: list[str], regex_mode: bool = False) -> tuple[list[SearchMatch], int, float]:
+    def search_folders(
+        self, query: str, folders: list[str], regex_mode: bool = False
+    ) -> tuple[list[SearchMatch], int, float]:
         """Search for query in the specified folders.
 
         Args:
@@ -153,7 +157,7 @@ class SearchEngine:
         # Find first match to center preview around
         match = pattern.search(original)
         if not match:
-            return original[:self.config.max_preview_chars] + "…"
+            return original[: self.config.max_preview_chars] + "…"
 
         span_start, span_end = match.span()
         center = (span_start + span_end) // 2

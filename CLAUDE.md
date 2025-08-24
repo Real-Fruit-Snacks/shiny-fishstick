@@ -54,6 +54,9 @@ pip install -e delta_vision
 # Run the application (local TUI mode)
 python -m delta_vision --new /path/to/New --old /path/to/Old --keywords /path/to/keywords.md
 
+# Quick test with included sample data
+python -m delta_vision --new New/ --old Old/ --keywords keywords.md
+
 # Run as server (spawns PTY sessions per client)
 python -m delta_vision --server --port 8765 --new /path/to/New --old /path/to/Old
 
@@ -95,31 +98,33 @@ Delta Vision is a Textual-based TUI application for file comparison and monitori
 ### Core Components
 
 **Main Application Structure:**
-- `entry_points.py`: CLI argument parsing, app initialization, mode detection (local/server/client)
-- `__main__.py`: Module entry point via `python -m delta_vision`
+- `delta_vision/src/delta_vision/entry_points.py`: CLI argument parsing, app initialization, mode detection (local/server/client)
+- `delta_vision/src/delta_vision/__main__.py`: Module entry point via `python -m delta_vision`
 - `HomeApp`: Main Textual application class in entry_points.py
   - Auto-registers themes on mount via themes/__init__.py discovery system
 
 **Screen Architecture:**
-- `screens/main_screen.py`: Home screen with navigation to feature screens
-- `screens/compare.py`: Side-by-side folder comparison
-- `screens/diff_viewer.py`: File diff display with tabs
-- `screens/search.py`: File content search interface
-- `screens/stream.py`: Real-time file monitoring
-- `screens/keywords_screen.py`: Keyword highlighting interface (830 lines, largest screen)
-- `screens/keywords_parser.py`: Markdown keyword file parser for color/category definitions
-- `screens/file_viewer.py`: File viewing with syntax highlighting and keyword support
-- `screens/watchdog_helper.py`: File system watching utilities
+- `delta_vision/src/delta_vision/screens/main_screen.py`: Home screen with navigation to feature screens
+- `delta_vision/src/delta_vision/screens/compare.py`: Side-by-side folder comparison
+- `delta_vision/src/delta_vision/screens/diff_viewer.py`: File diff display with tabs
+- `delta_vision/src/delta_vision/screens/search.py`: File content search interface
+- `delta_vision/src/delta_vision/screens/stream.py`: Real-time file monitoring with command highlighting
+- `delta_vision/src/delta_vision/screens/keywords_screen.py`: Keyword highlighting interface (830 lines, largest screen)
+- `delta_vision/src/delta_vision/screens/keywords_parser.py`: Markdown keyword file parser for color/category definitions
+- `delta_vision/src/delta_vision/screens/file_viewer.py`: File viewing with syntax highlighting and keyword support
+- `delta_vision/src/delta_vision/screens/watchdog_helper.py`: File system watching utilities
+- 10 Python files total, 6 CSS files (*.tcss) for styling
 
 **Networking (Server/Client Mode):**
-- `net/server.py`: WebSocket server that spawns PTY sessions per client (240 lines, refactored)
-- `net/client.py`: WebSocket client for remote sessions (199 lines, refactored)
+- `delta_vision/src/delta_vision/net/server.py`: WebSocket server that spawns PTY sessions per client (240 lines, refactored)
+- `delta_vision/src/delta_vision/net/client.py`: WebSocket client for remote sessions (199 lines, refactored)
 - Both use clean orchestrator pattern with focused helper methods (15-18 line main functions)
 - Server spawns child processes with inherited DELTA_* environment variables
 - Uses PTY for terminal multiplexing and resize handling
 - Comprehensive error handling and graceful process termination
+- Multi-user remote sessions supported via WebSocket
 
-**Utilities:**
+**Utilities (15 modules in delta_vision/src/delta_vision/utils/):**
 - `utils/base_screen.py`: **CRITICAL** - Base screen classes (BaseScreen, BaseTableScreen) providing standardized composition patterns and eliminating structural duplication across all screens
 - `utils/watchdog.py`: File system monitoring
 - `utils/config.py`: Configuration management with environment variable support
@@ -134,13 +139,15 @@ Delta Vision is a Textual-based TUI application for file comparison and monitori
 - `utils/keyword_highlighter.py`: Centralized keyword highlighting with caching and consistent styling
 - `utils/file_parsing.py`: File I/O and header parsing utilities (177 lines)
 - `utils/diff_engine.py`: Diff computation utilities using Python's difflib (52 lines)
+- `utils/screen_navigation.py`: Screen navigation utilities
 
 **UI Components:**
-- `widgets/header.py`: Application header
-- `widgets/footer.py`: Application footer with keybindings
-- `themes/`: Bundled color themes (default: ayu-mirage)
+- `delta_vision/src/delta_vision/widgets/header.py`: Application header
+- `delta_vision/src/delta_vision/widgets/footer.py`: Application footer with keybindings
+- `delta_vision/src/delta_vision/themes/`: Bundled color themes (default: ayu-mirage)
   - Accessible via standard Textual command palette (Ctrl+P)
   - Theme discovery system in `themes/__init__.py` auto-registers available themes
+  - 8 theme files: ayu, hotdog_stand, material, one_dark, tomorrow_night, tomorrow, witch_hazel, zenburn
 
 ### Key Patterns
 
@@ -191,11 +198,13 @@ Delta Vision is a Textual-based TUI application for file comparison and monitori
 - Embedded venv bundles for dependency-free distribution
 - CSS assets (`*.tcss`) included in wheel builds
 - Version managed in `src/delta_vision/__about__.py`
+- PyInstaller spec in `packaging/deltavision.spec` for standalone binaries
 
 **Testing:**
 - pytest with asyncio support (asyncio_mode=auto)
-- Tests located in `tests/` (root directory)
+- Tests located in `tests/` directory (12 test files)
 - Test paths configured in pytest.ini (excludes build dirs)
+- **Test data**: `New/` and `Old/` directories with sample files, `keywords.md` for keyword testing
 - **Current status**: All tests consistently pass
 - Comprehensive coverage for utilities (validation.py, keywords_parser.py, etc.)
 - Smoke tests for main screens and functionality
@@ -206,6 +215,13 @@ Delta Vision is a Textual-based TUI application for file comparison and monitori
 - Type hints encouraged but not strictly enforced
 - Import sorting via ruff's isort rules
 - **Current status**: Excellent code quality maintained via automated linting
+
+### Project Structure
+- **Root**: Configuration files, documentation, test data (`New/`, `Old/`, `keywords.md`)
+- **delta_vision/src/delta_vision/**: Main source code with screens, utils, themes, widgets, net
+- **delta_vision/tests/**: Test suite (12 files)  
+- **scripts/**: Build and release scripts (5 shell scripts)
+- **delta_vision/packaging/**: PyInstaller configuration
 
 **Current Architecture Status:**
 - ✅ **EXCEPTIONAL REFACTORING COMPLETED**: All critical massive functions successfully refactored using orchestrator pattern:
@@ -240,10 +256,12 @@ Delta Vision is a Textual-based TUI application for file comparison and monitori
 - **BaseScreen System**: All new screens MUST inherit from BaseScreen/BaseTableScreen - this is not optional
 - **File Viewer Keywords**: Uses `keywords_enabled=True` parameter when called from keywords/search screens
 - **Server/Client Shutdown**: Implements comprehensive signal handling with `_ignore_further_interrupts()` pattern
-- **Stream Screen Styling**: Uses `$accent` color for file titles for better visibility
+- **Stream Screen Styling**: Commands displayed with bold text, accent colors, and full-width dividers
 - **Consistent Key Bindings**: All toggle actions now use Ctrl+ combinations (Ctrl+K for keywords, Ctrl+R for regex, Ctrl+A for anchor)
 - **Dynamic Footer Updates**: Footer text shows toggle states (ON/OFF) and updates immediately when toggled
 - **Enhanced Error Handling**: All screens use defensive programming patterns with comprehensive exception handling
+- **Clean Project Structure**: Cleanup scripts available (`cleanup.sh`, `cleanup_safe.sh`) to remove ~203MB of build artifacts while preserving essential test data
+- **Project Maintenance**: Comprehensive cleanup analysis in `cleanup.md` identifies safe-to-delete files vs essential components
 
 ### Function Refactoring Approach
 When refactoring long functions, follow the proven orchestrator patterns:
@@ -306,6 +324,8 @@ When refactoring long functions, follow the proven orchestrator patterns:
 - No external dependencies required for end users
 - Server/client architecture supports multi-user remote sessions via WebSocket
 - Cross-platform support (Linux, macOS, Windows)
+- Build system produces release artifacts in `release/` directory
+- GitHub Actions workflow for automated releases
 
 ## Keywords File Format
 
@@ -327,7 +347,7 @@ UDP
 - Lines starting with `#` that don't match headers are treated as comments
 - Empty categories allowed and retained
 - Inline comments after keywords stripped when preceded by whitespace
-- Parsed by `screens/keywords_parser.py` with comprehensive test coverage
+- Parsed by `delta_vision/src/delta_vision/screens/keywords_parser.py` with comprehensive test coverage
 
 # important-instruction-reminders
 Do what has been asked; nothing more, nothing less.

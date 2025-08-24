@@ -83,7 +83,6 @@ class KeywordsScreen(BaseTableScreen):
         self._scanner.set_completion_callback(self._on_scan_complete)
         self._navigation = TableNavigationHandler()
 
-
     def compose_main_content(self) -> ComposeResult:
         with Vertical(id="kw-root"):
             with Vertical(id="kw-toolbar"):
@@ -91,13 +90,11 @@ class KeywordsScreen(BaseTableScreen):
                     # Left: buttons
                     _label = f"Hits: {'On' if self._hits_only else 'Off'}"
                     _variant = "success" if self._hits_only else "error"
-                    self._hits_btn = Button(
-                        _label, id="kw-hits-only", variant=_variant)
+                    self._hits_btn = Button(_label, id="kw-hits-only", variant=_variant)
                     yield self._hits_btn
                     yield Button("Clear", id="kw-clear", variant="warning")
                     # Expanding search input takes remaining width
-                    self._filter = Input(
-                        placeholder="Filter keywords…", id="kw-filter")
+                    self._filter = Input(placeholder="Filter keywords…", id="kw-filter")
                     yield self._filter
                 with Horizontal(id="kw-status-row"):
                     # Right-aligned lightweight status text
@@ -107,25 +104,19 @@ class KeywordsScreen(BaseTableScreen):
                 self._table = DataTable(id="kw-table")
                 self._table.add_column("Keyword", key="kw", width=32)
                 self._table.add_column("│", key="sep1", width=1)
-                self._table.add_column(
-                    Text("Category", justify="center"), key="cat", width=12)
+                self._table.add_column(Text("Category", justify="center"), key="cat", width=12)
                 self._table.add_column("│", key="sep2", width=1)
-                self._table.add_column(
-                    Text("NEW", justify="center"), key="new", width=4)
+                self._table.add_column(Text("NEW", justify="center"), key="new", width=4)
                 self._table.add_column("│", key="sep3", width=1)
-                self._table.add_column(
-                    Text("OLD", justify="center"), key="old", width=4)
+                self._table.add_column(Text("OLD", justify="center"), key="old", width=4)
                 self._table.add_column("│", key="sep4", width=1)
-                self._table.add_column(
-                    Text("Total", justify="center"), key="total", width=5)
+                self._table.add_column(Text("Total", justify="center"), key="total", width=5)
                 yield self._table
                 # Right-side table for exact matches (no file column)
                 self._details_table = DataTable(id="kw-details")
-                self._details_table.add_column(
-                    Text("Side", justify="center"), key="side", width=6)
+                self._details_table.add_column(Text("Side", justify="center"), key="side", width=6)
                 self._details_table.add_column("│", key="dsep1", width=1)
-                self._details_table.add_column(
-                    Text("Line", justify="center"), key="line", width=6)
+                self._details_table.add_column(Text("Line", justify="center"), key="line", width=6)
                 self._details_table.add_column("│", key="dsep2", width=1)
                 self._details_table.add_column("Preview", key="preview")
                 yield self._details_table
@@ -158,7 +149,8 @@ class KeywordsScreen(BaseTableScreen):
             if self.new_folder_path and os.path.isdir(self.new_folder_path):
                 # Use a higher debounce to coalesce bursts from large trees
                 self._observer_new, self._stop_new = start_observer(
-                    self.new_folder_path, trigger_refresh, debounce_ms=1000)
+                    self.new_folder_path, trigger_refresh, debounce_ms=1000
+                )
         except OSError:
             log("Could not start file watcher for NEW folder")
             self._observer_new = None
@@ -166,7 +158,8 @@ class KeywordsScreen(BaseTableScreen):
         try:
             if self.old_folder_path and os.path.isdir(self.old_folder_path):
                 self._observer_old, self._stop_old = start_observer(
-                    self.old_folder_path, trigger_refresh, debounce_ms=1000)
+                    self.old_folder_path, trigger_refresh, debounce_ms=1000
+                )
         except OSError:
             log("Could not start file watcher for OLD folder")
             self._observer_old = None
@@ -228,6 +221,7 @@ class KeywordsScreen(BaseTableScreen):
 
         Only checks existence, size, and mtime; does not read file contents.
         """
+
         def side_changed(side: str, base: str | None) -> bool:
             if not base or not os.path.isdir(base):
                 # If previously had entries but base is now missing, that's a change
@@ -258,6 +252,7 @@ class KeywordsScreen(BaseTableScreen):
             return False
 
         return side_changed("NEW", self.new_folder_path) or side_changed("OLD", self.old_folder_path)
+
     def _start_scan(self):
         """Start background scanning."""
         try:
@@ -295,21 +290,21 @@ class KeywordsScreen(BaseTableScreen):
         summary = {}
         for kw, _hit_info in result.summary.items():
             # Build summary statistics like the original code
-            new_count = sum(result.file_counts.get("NEW", {}).get(fp, {}).get(kw, 0)
-                           for fp in result.file_counts.get("NEW", {}))
-            old_count = sum(result.file_counts.get("OLD", {}).get(fp, {}).get(kw, 0)
-                           for fp in result.file_counts.get("OLD", {}))
-            new_files = sum(1 for counts in result.file_counts.get("NEW", {}).values()
-                           if counts.get(kw, 0) > 0)
-            old_files = sum(1 for counts in result.file_counts.get("OLD", {}).values()
-                           if counts.get(kw, 0) > 0)
+            new_count = sum(
+                result.file_counts.get("NEW", {}).get(fp, {}).get(kw, 0) for fp in result.file_counts.get("NEW", {})
+            )
+            old_count = sum(
+                result.file_counts.get("OLD", {}).get(fp, {}).get(kw, 0) for fp in result.file_counts.get("OLD", {})
+            )
+            new_files = sum(1 for counts in result.file_counts.get("NEW", {}).values() if counts.get(kw, 0) > 0)
+            old_files = sum(1 for counts in result.file_counts.get("OLD", {}).values() if counts.get(kw, 0) > 0)
 
             summary[kw] = {
                 "NEW": new_count,
                 "OLD": old_count,
                 "TOTAL": new_count + old_count,
                 "NEW_FILES": new_files,
-                "OLD_FILES": old_files
+                "OLD_FILES": old_files,
             }
 
         self._summary = summary
@@ -323,7 +318,6 @@ class KeywordsScreen(BaseTableScreen):
             self._populate_table()
         except Exception as e:
             log(f"Error updating UI after scan: {e}")
-
 
     def on_button_pressed(self, event):
         if event.button.id == "kw-clear" and self._filter:
@@ -667,12 +661,7 @@ class KeywordsScreen(BaseTableScreen):
         plain = self._trim_line_preview(line, pattern)
 
         # Create highlighted preview using centralized highlighter
-        highlighted = highlighter.highlight_with_pattern(
-            text=plain,
-            pattern=pattern,
-            color=color,
-            underline=False
-        )
+        highlighted = highlighter.highlight_with_pattern(text=plain, pattern=pattern, color=color, underline=False)
 
         # Create table cells
         side_cell = self._create_side_cell(side)
@@ -692,7 +681,7 @@ class KeywordsScreen(BaseTableScreen):
             end = start + config.max_preview_chars
             return line[start:end]
         else:
-            return line[:config.max_preview_chars]
+            return line[: config.max_preview_chars]
 
     def _create_side_cell(self, side: str) -> Text:
         """Create side indicator cell (NEW/OLD)."""
@@ -739,8 +728,7 @@ class KeywordsScreen(BaseTableScreen):
         if self._details_table:
             try:
                 if self.screen.focused == self._details_table:
-                    coord = getattr(self._details_table,
-                                    'cursor_coordinate', None)
+                    coord = getattr(self._details_table, 'cursor_coordinate', None)
                     if coord is None:
                         return
                     row_index = getattr(coord, 'row', None)
@@ -752,6 +740,7 @@ class KeywordsScreen(BaseTableScreen):
 
                     if not hasattr(self, '_navigator') or self._navigator is None:
                         from delta_vision.utils.screen_navigation import create_navigator
+
                         self._navigator = create_navigator(self.app)
 
                     self._navigator.open_file_viewer(
@@ -769,10 +758,7 @@ class KeywordsScreen(BaseTableScreen):
     def on_key(self, event):
         """Handle key events for table navigation and actions."""
         # Prepare tables dictionary for navigation handler
-        tables = {
-            'main': self._table,
-            'details': self._details_table
-        }
+        tables = {'main': self._table, 'details': self._details_table}
 
         # Handle special cases first
         key = getattr(event, 'key', None)
@@ -790,7 +776,7 @@ class KeywordsScreen(BaseTableScreen):
             self.screen.focused,
             tables,
             enter_callback=self._handle_enter_key,
-            navigation_callback=self._on_navigation_change
+            navigation_callback=self._on_navigation_change,
         )
 
         if handled:
