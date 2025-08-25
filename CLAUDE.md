@@ -124,7 +124,7 @@ Delta Vision is a Textual-based TUI application for file comparison and monitori
 - Comprehensive error handling and graceful process termination
 - Multi-user remote sessions supported via WebSocket
 
-**Utilities (15 modules in delta_vision/src/delta_vision/utils/):**
+**Utilities (16 modules in delta_vision/src/delta_vision/utils/):**
 - `utils/base_screen.py`: **CRITICAL** - Base screen classes (BaseScreen, BaseTableScreen) providing standardized composition patterns and eliminating structural duplication across all screens
 - `utils/watchdog.py`: File system monitoring
 - `utils/config.py`: Configuration management with environment variable support
@@ -140,6 +140,7 @@ Delta Vision is a Textual-based TUI application for file comparison and monitori
 - `utils/file_parsing.py`: File I/O and header parsing utilities (177 lines)
 - `utils/diff_engine.py`: Diff computation utilities using Python's difflib (52 lines)
 - `utils/screen_navigation.py`: Screen navigation utilities
+- `utils/theme_color_calculator.py`: Centralized theme color calculation with caching for search highlighting (203 lines, extracted from search.py complexity)
 
 **UI Components:**
 - `delta_vision/src/delta_vision/widgets/header.py`: Application header
@@ -147,7 +148,7 @@ Delta Vision is a Textual-based TUI application for file comparison and monitori
 - `delta_vision/src/delta_vision/themes/`: Bundled color themes (default: ayu-mirage)
   - Accessible via standard Textual command palette (Ctrl+P)
   - Theme discovery system in `themes/__init__.py` auto-registers available themes
-  - 8 theme files: ayu, hotdog_stand, material, one_dark, tomorrow_night, tomorrow, witch_hazel, zenburn
+  - 15 theme files: ayu, cyberpunk2077, dainty, hackthebox, hotdog_stand, houston, kanagawa, material, monaspace, one_dark, synthwave84, tomorrow, tomorrow_night, witch_hazel, zenburn
 
 ### Key Patterns
 
@@ -242,13 +243,14 @@ Delta Vision is a Textual-based TUI application for file comparison and monitori
   - `diff_viewer.py`: Major functions refactored with file_parsing.py and diff_engine.py utilities
 - ✅ **ALL HIGH PRIORITY ITEMS COMPLETED**: No long functions (>80 lines) remain - all successfully refactored
 - ✅ **DEEP NESTING ELIMINATED**: 5 most complex functions (depth 6-8) reduced to depth 2-3
-- Current file sizes: `diff_viewer.py` (830 lines), `search.py` (698 lines), `keywords_screen.py` (830 lines), `compare.py` (625 lines)
+- Current file sizes: `diff_viewer.py` (830 lines), `search.py` (594 lines, reduced from 698 via theme extraction), `keywords_screen.py` (830 lines), `compare.py` (625 lines)
 - **ERROR HANDLING**: All 202+ bare except blocks systematically replaced with specific exception handling
-- **UTILITY EXTRACTION**: Created focused utility modules (search_engine.py, keywords_scanner.py, diff_engine.py, file_parsing.py, validation.py, table_navigation.py)
+- **UTILITY EXTRACTION**: Created focused utility modules (search_engine.py, keywords_scanner.py, diff_engine.py, file_parsing.py, validation.py, table_navigation.py, theme_color_calculator.py)
 - **LEGACY CODE CLEANUP**: All legacy compatibility code and unused imports removed for clean, modern codebase
 - ✅ **BASE SCREEN ARCHITECTURE**: Complete screen inheritance system implemented - all screens now inherit from BaseScreen/BaseTableScreen, eliminating ~354+ lines of structural duplication with standardized composition patterns
 - ✅ **CLIENT/SERVER IMPROVEMENTS**: Comprehensive graceful shutdown handling implemented with proper signal management and connection cleanup
 - ✅ **KEYWORDS DEFAULT ENABLED**: File viewer automatically enables keyword highlighting when accessed from keywords/search screens
+- ✅ **THEME COLOR OPTIMIZATION**: Extracted complex theme calculation logic from search.py to ThemeColorCalculator utility (203 lines) with performance caching
 
 ## Important Development Patterns
 
@@ -262,6 +264,8 @@ Delta Vision is a Textual-based TUI application for file comparison and monitori
 - **Enhanced Error Handling**: All screens use defensive programming patterns with comprehensive exception handling
 - **Clean Project Structure**: Cleanup scripts available (`cleanup.sh`, `cleanup_safe.sh`) to remove ~203MB of build artifacts while preserving essential test data
 - **Project Maintenance**: Comprehensive cleanup analysis in `cleanup.md` identifies safe-to-delete files vs essential components
+- **Keyword Color Consistency**: All keyword highlighting across screens uses colors from keywords.md as single source of truth (fixed search/viewer inconsistency)
+- **Theme Performance**: ThemeColorCalculator provides cached theme color calculations with luminance-based contrast optimization
 
 ### Function Refactoring Approach
 When refactoring long functions, follow the proven orchestrator patterns:
@@ -307,9 +311,11 @@ When refactoring long functions, follow the proven orchestrator patterns:
 
 ### Utility Module Patterns
 - **Pure Functions**: Prefer stateless functions where possible (diff_engine.py, file_parsing.py)
-- **Class-Based**: Use classes for stateful operations (KeywordScanner, SearchEngine)
+- **Class-Based**: Use classes for stateful operations (KeywordScanner, SearchEngine, ThemeColorCalculator)
+- **Performance Caching**: Implement caching in utilities for expensive operations (ThemeColorCalculator, KeywordHighlighter)
 - **Type Safety**: Include type aliases and dataclasses (DiffRow, SearchMatch, SearchConfig)
 - **Error Handling**: All utilities must use specific exception types with logging
+- **Global Instances**: Provide convenience global instances (theme_calculator, highlighter) with clear cache management
 
 ### Testing Strategy
 - Utility modules should have comprehensive unit tests (validation.py, keywords_parser.py well-covered)
@@ -348,6 +354,13 @@ UDP
 - Empty categories allowed and retained
 - Inline comments after keywords stripped when preceded by whitespace
 - Parsed by `delta_vision/src/delta_vision/screens/keywords_parser.py` with comprehensive test coverage
+
+**Color Consistency (Critical):**
+- **Keywords.md is the single source of truth** for all keyword colors across the application
+- All screens (Search, Viewer, Diff, Stream, Keywords) must use colors from keywords.md
+- Search screen uses `highlight_with_color_lookup()` method (same as viewer) to ensure consistency
+- Theme-based highlighting only applies to non-keyword search matches
+- **Never override keyword colors** with theme colors - they must remain consistent across all screens
 
 # important-instruction-reminders
 Do what has been asked; nothing more, nothing less.

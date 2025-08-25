@@ -50,12 +50,7 @@ class TestSearchEngineBasic:
 
     def test_search_match_creation(self):
         """Test search match creation."""
-        match = SearchMatch(
-            file_path="/test/file.txt",
-            line_no=1,
-            line="test content",
-            cmd="test command"
-        )
+        match = SearchMatch(file_path="/test/file.txt", line_no=1, line="test content", cmd="test command")
         assert match.file_path == "/test/file.txt"
         assert match.line_no == 1
         assert match.line == "test content"
@@ -65,11 +60,7 @@ class TestSearchEngineBasic:
         """Test basic search functionality."""
         engine = SearchEngine()
 
-        matches, files_scanned, elapsed = engine.search_folders(
-            query="test",
-            folders=[test_files],
-            regex_mode=False
-        )
+        matches, files_scanned, elapsed = engine.search_folders(query="test", folders=[test_files], regex_mode=False)
 
         # Basic validation
         assert isinstance(matches, list)
@@ -82,11 +73,7 @@ class TestSearchEngineBasic:
         """Test regex search functionality."""
         engine = SearchEngine()
 
-        matches, files_scanned, elapsed = engine.search_folders(
-            query=r"test\w*",
-            folders=[test_files],
-            regex_mode=True
-        )
+        matches, files_scanned, elapsed = engine.search_folders(query=r"test\w*", folders=[test_files], regex_mode=True)
 
         # Should handle regex without crashing
         assert isinstance(matches, list)
@@ -98,11 +85,7 @@ class TestSearchEngineBasic:
         config = SearchConfig(case_sensitive=True)
         engine = SearchEngine(config)
 
-        matches, files_scanned, elapsed = engine.search_folders(
-            query="TEST",
-            folders=[test_files],
-            regex_mode=False
-        )
+        matches, files_scanned, elapsed = engine.search_folders(query="TEST", folders=[test_files], regex_mode=False)
 
         # Should handle case sensitivity
         assert isinstance(matches, list)
@@ -112,11 +95,7 @@ class TestSearchEngineBasic:
         """Test search with empty query."""
         engine = SearchEngine()
 
-        matches, files_scanned, elapsed = engine.search_folders(
-            query="",
-            folders=[test_files],
-            regex_mode=False
-        )
+        matches, files_scanned, elapsed = engine.search_folders(query="", folders=[test_files], regex_mode=False)
 
         # Should handle empty query gracefully
         # (May return all lines or no lines depending on implementation)
@@ -127,9 +106,7 @@ class TestSearchEngineBasic:
         engine = SearchEngine()
 
         matches, files_scanned, elapsed = engine.search_folders(
-            query="test",
-            folders=["/nonexistent/path"],
-            regex_mode=False
+            query="test", folders=["/nonexistent/path"], regex_mode=False
         )
 
         # Should handle missing folders gracefully
@@ -141,9 +118,7 @@ class TestSearchEngineBasic:
         engine = SearchEngine()
 
         matches, files_scanned, elapsed = engine.search_folders(
-            query="[invalid regex(",
-            folders=[test_files],
-            regex_mode=True
+            query="[invalid regex(", folders=[test_files], regex_mode=True
         )
 
         # Should handle invalid regex gracefully
@@ -155,11 +130,7 @@ class TestSearchEngineBasic:
         config = SearchConfig(max_files=1)
         engine = SearchEngine(config)
 
-        matches, files_scanned, elapsed = engine.search_folders(
-            query="test",
-            folders=[test_files],
-            regex_mode=False
-        )
+        matches, files_scanned, elapsed = engine.search_folders(query="test", folders=[test_files], regex_mode=False)
 
         # Should respect max files limit
         assert files_scanned <= 1
@@ -176,9 +147,7 @@ class TestSearchEngineBasic:
                 f.write("More test content.\n")
 
             matches, files_scanned, elapsed = engine.search_folders(
-                query="test",
-                folders=[test_files, second_dir],
-                regex_mode=False
+                query="test", folders=[test_files, second_dir], regex_mode=False
             )
 
             # Should search both folders
@@ -192,11 +161,7 @@ class TestSearchEngineBasic:
         engine = SearchEngine()
         start_time = time.time()
 
-        matches, files_scanned, elapsed = engine.search_folders(
-            query="test",
-            folders=[test_files],
-            regex_mode=False
-        )
+        matches, files_scanned, elapsed = engine.search_folders(query="test", folders=[test_files], regex_mode=False)
 
         total_time = time.time() - start_time
 

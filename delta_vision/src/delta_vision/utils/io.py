@@ -9,6 +9,7 @@ from .logger import log
 @dataclass
 class FileReadResult:
     """Result of file reading operations with consistent error handling."""
+
     success: bool
     content: str = ""
     lines: list[str] = None
@@ -18,6 +19,7 @@ class FileReadResult:
     def __post_init__(self):
         if self.lines is None:
             self.lines = []
+
 
 DEFAULT_ENCODINGS: tuple[str, ...] = (
     "utf-8",
@@ -72,6 +74,7 @@ def read_lines(
 
 # Consolidated file I/O functions to reduce duplication
 
+
 def safe_read_file(file_path: str, default_content: str = "") -> FileReadResult:
     """Safely read a file with comprehensive error handling.
 
@@ -86,37 +89,22 @@ def safe_read_file(file_path: str, default_content: str = "") -> FileReadResult:
         FileReadResult with success status, content, and error details
     """
     if not file_path:
-        return FileReadResult(
-            success=False,
-            content=default_content,
-            error_message="No file path provided"
-        )
+        return FileReadResult(success=False, content=default_content, error_message="No file path provided")
 
     try:
         content, encoding = read_text(file_path)
         if content or encoding:  # Success case
             return FileReadResult(
-                success=True,
-                content=content,
-                lines=content.splitlines() if content else [],
-                encoding=encoding
+                success=True, content=content, lines=content.splitlines() if content else [], encoding=encoding
             )
         else:  # Empty result indicates read failure
             error_msg = f"Failed to read file: {file_path}"
             log(f"[IO] {error_msg}")
-            return FileReadResult(
-                success=False,
-                content=default_content,
-                error_message=error_msg
-            )
+            return FileReadResult(success=False, content=default_content, error_message=error_msg)
     except (OSError, UnicodeDecodeError) as e:
         error_msg = f"Error reading {file_path}: {e}"
         log(f"[IO] {error_msg}")
-        return FileReadResult(
-            success=False,
-            content=default_content,
-            error_message=error_msg
-        )
+        return FileReadResult(success=False, content=default_content, error_message=error_msg)
 
 
 def safe_read_lines(file_path: str, skip_header: bool = False) -> FileReadResult:

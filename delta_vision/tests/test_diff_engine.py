@@ -24,7 +24,7 @@ class TestDiffRow:
             left_line_num=10,
             right_line_num=12,
             left_content="Old content",
-            right_content="New content"
+            right_content="New content",
         )
 
         assert row.diff_type == DiffType.MODIFIED
@@ -40,7 +40,7 @@ class TestDiffRow:
             left_line_num=None,
             right_line_num=5,
             left_content="",
-            right_content="New line added"
+            right_content="New line added",
         )
 
         assert row.diff_type == DiffType.ADDED
@@ -56,7 +56,7 @@ class TestDiffRow:
             left_line_num=8,
             right_line_num=None,
             left_content="Deleted line",
-            right_content=""
+            right_content="",
         )
 
         assert row.diff_type == DiffType.DELETED
@@ -72,7 +72,7 @@ class TestDiffRow:
             left_line_num=3,
             right_line_num=3,
             left_content="Same content",
-            right_content="Same content"
+            right_content="Same content",
         )
 
         assert row.diff_type == DiffType.UNCHANGED
@@ -283,11 +283,11 @@ class TestComputeDiffRows:
         # Create binary files
         left_fd, left_path = tempfile.mkstemp(suffix='.bin')
         with os.fdopen(left_fd, 'wb') as f:
-            f.write(b'\x00\x01\x02\x03\xFF\xFE')
+            f.write(b'\x00\x01\x02\x03\xff\xfe')
 
         right_fd, right_path = tempfile.mkstemp(suffix='.bin')
         with os.fdopen(right_fd, 'wb') as f:
-            f.write(b'\x00\x01\x02\x04\xFF\xFE')  # One byte different
+            f.write(b'\x00\x01\x02\x04\xff\xfe')  # One byte different
 
         try:
             diff_rows = compute_diff_rows(left_path, right_path)
@@ -364,8 +364,7 @@ class TestComputeDiffRows:
 
             # Should detect the modification
             has_modification = any(
-                row.diff_type in [DiffType.MODIFIED, DiffType.ADDED, DiffType.DELETED]
-                for row in diff_rows
+                row.diff_type in [DiffType.MODIFIED, DiffType.ADDED, DiffType.DELETED] for row in diff_rows
             )
             assert has_modification
 
@@ -386,7 +385,7 @@ class TestComputeDiffRows:
         with os.fdopen(right_fd, 'w') as f:
             f.write('20250101 "whitespace test"\n')
             f.write("Line  with  spaces\n")  # Different spacing
-            f.write("Line with    tabs\n")    # Tabs converted to spaces
+            f.write("Line with    tabs\n")  # Tabs converted to spaces
             f.write("Line with trailing spaces\n")  # Trailing spaces removed
 
         try:
@@ -397,10 +396,7 @@ class TestComputeDiffRows:
             assert len(diff_rows) > 0
 
             # Should identify whitespace changes as modifications
-            any(
-                row.diff_type in [DiffType.MODIFIED, DiffType.ADDED, DiffType.DELETED]
-                for row in diff_rows
-            )
+            any(row.diff_type in [DiffType.MODIFIED, DiffType.ADDED, DiffType.DELETED] for row in diff_rows)
 
         finally:
             os.unlink(left_path)
@@ -442,12 +438,15 @@ class TestComputeDiffRows:
                     expected_right = right_lines[row.right_line_num - 1].rstrip('\n')
                     assert row.right_content == expected_right
 
-    @pytest.mark.parametrize("left_content,right_content,expected_change", [
-        ("Line 1\nLine 2\n", "Line 1\nLine 2\n", False),  # Identical
-        ("Line 1\nLine 2\n", "Line 1\nLine 3\n", True),   # Modified
-        ("Line 1\nLine 2\n", "Line 1\nLine 2\nLine 3\n", True),  # Added
-        ("Line 1\nLine 2\nLine 3\n", "Line 1\nLine 2\n", True),  # Deleted
-    ])
+    @pytest.mark.parametrize(
+        "left_content,right_content,expected_change",
+        [
+            ("Line 1\nLine 2\n", "Line 1\nLine 2\n", False),  # Identical
+            ("Line 1\nLine 2\n", "Line 1\nLine 3\n", True),  # Modified
+            ("Line 1\nLine 2\n", "Line 1\nLine 2\nLine 3\n", True),  # Added
+            ("Line 1\nLine 2\nLine 3\n", "Line 1\nLine 2\n", True),  # Deleted
+        ],
+    )
     def test_diff_change_detection(self, left_content, right_content, expected_change):
         """Test diff change detection with various scenarios."""
         left_fd, left_path = tempfile.mkstemp(suffix='.txt', text=True)
@@ -461,10 +460,7 @@ class TestComputeDiffRows:
         try:
             diff_rows = compute_diff_rows(left_path, right_path)
 
-            has_changes = any(
-                row.diff_type != DiffType.UNCHANGED
-                for row in diff_rows
-            )
+            has_changes = any(row.diff_type != DiffType.UNCHANGED for row in diff_rows)
 
             assert has_changes == expected_change
 

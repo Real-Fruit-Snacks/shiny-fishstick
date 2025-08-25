@@ -12,6 +12,8 @@ import re
 import socket
 from pathlib import Path
 
+from .config import config
+
 
 class ValidationError(Exception):
     """Raised when input validation fails."""
@@ -68,8 +70,8 @@ def validate_directory_path(path: str, name: str = "Path", must_exist: bool = Tr
         raise ValidationError(f"{name} is not a valid path: {e}") from e
 
     # Check path length (reasonable limit)
-    if len(abs_path) > 4096:
-        raise ValidationError(f"{name} is too long (max 4096 characters)")
+    if len(abs_path) > config.max_path_length:
+        raise ValidationError(f"{name} is too long (max {config.max_path_length} characters)")
 
     # Check for null bytes and other dangerous characters
     if '\x00' in abs_path or any(ord(c) < 32 for c in abs_path if c not in '\t\n\r'):
@@ -139,8 +141,8 @@ def validate_file_path(path: str, name: str = "File", must_exist: bool = True, c
         raise ValidationError(f"{name} is not a valid path: {e}") from e
 
     # Check path length
-    if len(abs_path) > 4096:
-        raise ValidationError(f"{name} is too long (max 4096 characters)")
+    if len(abs_path) > config.max_path_length:
+        raise ValidationError(f"{name} is too long (max {config.max_path_length} characters)")
 
     # Check for dangerous characters
     if '\x00' in abs_path or any(ord(c) < 32 for c in abs_path if c not in '\t\n\r'):

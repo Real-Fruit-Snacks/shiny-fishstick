@@ -93,7 +93,7 @@ iscsi
 ceph
 iops
 
-# Backup (Teal)
+# Backup (Cyan)
 backup
 restore
 snapshot

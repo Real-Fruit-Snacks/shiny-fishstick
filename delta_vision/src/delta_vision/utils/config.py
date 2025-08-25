@@ -1,9 +1,14 @@
 from __future__ import annotations
 
 import os
-from typing import Final
+import re
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any, Final
 
 from .logger import log
+
+if TYPE_CHECKING:
+    from rich.text import Text
 
 
 class ConfigError(Exception):
@@ -12,17 +17,82 @@ class ConfigError(Exception):
     pass
 
 
+@dataclass
+class PathsConfig:
+    """Configuration object for file and folder paths used throughout Delta Vision."""
+
+    new_folder_path: str | None = None
+    old_folder_path: str | None = None
+    keywords_path: str | None = None
+
+    @classmethod
+    def from_args(cls, args) -> PathsConfig:
+        """Create PathsConfig from command line arguments."""
+        return cls(new_folder_path=args.new, old_folder_path=args.old, keywords_path=args.keywords)
+
+    @classmethod
+    def from_env(cls) -> PathsConfig:
+        """Create PathsConfig from environment variables."""
+        return cls(
+            new_folder_path=os.environ.get('DELTA_NEW'),
+            old_folder_path=os.environ.get('DELTA_OLD'),
+            keywords_path=os.environ.get('DELTA_KEYWORDS'),
+        )
+
+    def merge_with_env(self) -> PathsConfig:
+        """Merge with environment variables, keeping existing values if they exist."""
+        return PathsConfig(
+            new_folder_path=self.new_folder_path or os.environ.get('DELTA_NEW'),
+            old_folder_path=self.old_folder_path or os.environ.get('DELTA_OLD'),
+            keywords_path=self.keywords_path or os.environ.get('DELTA_KEYWORDS'),
+        )
+
+
+@dataclass
+class KeywordMatchConfig:
+    """Configuration object for keyword matching operations."""
+
+    file_path: str
+    keyword: str
+    side: str
+    color: str
+    pattern: re.Pattern
+
+
+@dataclass
+class TableRowConfig:
+    """Configuration object for adding details table rows."""
+
+    side_cell: Text
+    line_cell: Text
+    highlighted: str
+    line_num: int
+    file_path: str
+
+
+@dataclass
+class SearchSummaryConfig:
+    """Configuration object for search summary updates."""
+
+    matches: list[Any]  # List of SearchMatch objects
+    query: str
+    elapsed: float
+    files_scanned: int
+
+
 class Config:
     """Delta Vision configuration with environment variable support and validation."""
 
     # Default values
     _DEFAULT_MAX_FILES: Final[int] = 5000
-    _DEFAULT_MAX_PREVIEW_CHARS: Final[int] = 500
+    _DEFAULT_MAX_PREVIEW_CHARS: Final[int] = 200
     _DEFAULT_MAX_RENDER_LINES: Final[int] = 5000
     _DEFAULT_REFRESH_INTERVAL: Final[float] = 1.0
     _DEFAULT_DEBOUNCE_MS: Final[int] = 300
     _DEFAULT_NETWORK_TIMEOUT: Final[int] = 30
     _DEFAULT_CONTEXT_LINES: Final[int] = 3
+    _DEFAULT_MAX_PATH_LENGTH: Final[int] = 4096
+    _DEFAULT_BUFFER_SIZE: Final[int] = 4096
 
     # Validation bounds
     _MIN_MAX_FILES: Final[int] = 100
@@ -39,6 +109,10 @@ class Config:
     _MAX_NETWORK_TIMEOUT: Final[int] = 300
     _MIN_CONTEXT_LINES: Final[int] = 0
     _MAX_CONTEXT_LINES: Final[int] = 10
+    _MIN_MAX_PATH_LENGTH: Final[int] = 1024
+    _MAX_MAX_PATH_LENGTH: Final[int] = 65536
+    _MIN_BUFFER_SIZE: Final[int] = 1024
+    _MAX_BUFFER_SIZE: Final[int] = 65536
 
     def __init__(self):
         """Initialize configuration with environment variable overrides."""
@@ -49,6 +123,8 @@ class Config:
         self.debounce_ms = self._get_int_env("DELTA_DEBOUNCE_MS", self._DEFAULT_DEBOUNCE_MS)
         self.network_timeout = self._get_int_env("DELTA_NETWORK_TIMEOUT", self._DEFAULT_NETWORK_TIMEOUT)
         self.context_lines = self._get_int_env("DELTA_CONTEXT_LINES", self._DEFAULT_CONTEXT_LINES)
+        self.max_path_length = self._get_int_env("DELTA_MAX_PATH_LENGTH", self._DEFAULT_MAX_PATH_LENGTH)
+        self.buffer_size = self._get_int_env("DELTA_BUFFER_SIZE", self._DEFAULT_BUFFER_SIZE)
 
         self._validate_all()
 
@@ -91,6 +167,10 @@ class Config:
             "network_timeout", self.network_timeout, self._MIN_NETWORK_TIMEOUT, self._MAX_NETWORK_TIMEOUT
         )
         self._validate_int("context_lines", self.context_lines, self._MIN_CONTEXT_LINES, self._MAX_CONTEXT_LINES)
+        self._validate_int(
+            "max_path_length", self.max_path_length, self._MIN_MAX_PATH_LENGTH, self._MAX_MAX_PATH_LENGTH
+        )
+        self._validate_int("buffer_size", self.buffer_size, self._MIN_BUFFER_SIZE, self._MAX_BUFFER_SIZE)
 
     def _validate_int(self, name: str, value: int, min_val: int, max_val: int) -> None:
         """Validate integer configuration value."""
@@ -115,7 +195,9 @@ class Config:
             f"refresh_interval={self.refresh_interval}, "
             f"debounce_ms={self.debounce_ms}, "
             f"network_timeout={self.network_timeout}, "
-            f"context_lines={self.context_lines})"
+            f"context_lines={self.context_lines}, "
+            f"max_path_length={self.max_path_length}, "
+            f"buffer_size={self.buffer_size})"
         )
 
 

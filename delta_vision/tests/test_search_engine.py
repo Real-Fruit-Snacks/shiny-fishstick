@@ -19,11 +19,7 @@ class TestSearchConfig:
 
     def test_search_config_creation(self):
         """Test creating a search configuration."""
-        config = SearchConfig(
-            max_files=1000,
-            max_preview_chars=150,
-            case_sensitive=True
-        )
+        config = SearchConfig(max_files=1000, max_preview_chars=150, case_sensitive=True)
 
         assert config.max_files == 1000
         assert config.max_preview_chars == 150
@@ -59,7 +55,7 @@ class TestSearchMatch:
             line_no=10,
             line="This is a test line with match",
             cmd="test command",
-            is_error=False
+            is_error=False,
         )
 
         assert match.file_path == "/path/to/file.txt"
@@ -70,11 +66,7 @@ class TestSearchMatch:
 
     def test_search_match_defaults(self):
         """Test search match with minimal data."""
-        match = SearchMatch(
-            file_path="/path/to/file.txt",
-            line_no=5,
-            line="test line"
-        )
+        match = SearchMatch(file_path="/path/to/file.txt", line_no=5, line="test line")
 
         assert match.file_path == "/path/to/file.txt"
         assert match.line_no == 5
@@ -84,13 +76,7 @@ class TestSearchMatch:
 
     def test_search_match_error(self):
         """Test search match for error conditions."""
-        match = SearchMatch(
-            file_path="/error/path",
-            line_no=0,
-            line="[Error reading file]",
-            cmd=None,
-            is_error=True
-        )
+        match = SearchMatch(file_path="/error/path", line_no=0, line="[Error reading file]", cmd=None, is_error=True)
 
         assert match.file_path == "/error/path"
         assert match.line_no == 0
@@ -152,9 +138,7 @@ class TestSearchEngine:
         engine = SearchEngine(config)
 
         matches, files_scanned, elapsed = engine.search_folders(
-            query="test",
-            folders=[new_dir, old_dir],
-            regex_mode=False
+            query="test", folders=[new_dir, old_dir], regex_mode=False
         )
 
         # Should find matches in files containing "test"
@@ -180,22 +164,14 @@ class TestSearchEngine:
 
         # Case-insensitive search
         config_insensitive = SearchConfig(
-            query="TESTING",
-            use_regex=False,
-            case_sensitive=False,
-            new_folder=new_dir,
-            old_folder=old_dir
+            query="TESTING", use_regex=False, case_sensitive=False, new_folder=new_dir, old_folder=old_dir
         )
 
         results_insensitive = self.engine.search(config_insensitive)
 
         # Case-sensitive search
         config_sensitive = SearchConfig(
-            query="TESTING",
-            use_regex=False,
-            case_sensitive=True,
-            new_folder=new_dir,
-            old_folder=old_dir
+            query="TESTING", use_regex=False, case_sensitive=True, new_folder=new_dir, old_folder=old_dir
         )
 
         results_sensitive = self.engine.search(config_sensitive)
@@ -217,7 +193,7 @@ class TestSearchEngine:
             use_regex=True,
             case_sensitive=False,
             new_folder=new_dir,
-            old_folder=old_dir
+            old_folder=old_dir,
         )
 
         results = self.engine.search(config)
@@ -231,7 +207,7 @@ class TestSearchEngine:
             for match in result.matches:
                 # Extract the matched portion from the line
                 if match.match_start > 0 and match.match_end > match.match_start:
-                    matched_text = match.line_content[match.match_start:match.match_end]
+                    matched_text = match.line_content[match.match_start : match.match_end]
                     found_patterns.append(matched_text.lower())
 
         # Should have found words starting with "test"
@@ -246,7 +222,7 @@ class TestSearchEngine:
             use_regex=True,
             case_sensitive=False,
             new_folder=new_dir,
-            old_folder=old_dir
+            old_folder=old_dir,
         )
 
         # Should handle invalid regex gracefully
@@ -259,13 +235,7 @@ class TestSearchEngine:
         """Test search with empty query."""
         new_dir, old_dir = test_files
 
-        config = SearchConfig(
-            query="",
-            use_regex=False,
-            case_sensitive=False,
-            new_folder=new_dir,
-            old_folder=old_dir
-        )
+        config = SearchConfig(query="", use_regex=False, case_sensitive=False, new_folder=new_dir, old_folder=old_dir)
 
         results = self.engine.search(config)
 
@@ -279,7 +249,7 @@ class TestSearchEngine:
             use_regex=False,
             case_sensitive=False,
             new_folder="/nonexistent/new",
-            old_folder="/nonexistent/old"
+            old_folder="/nonexistent/old",
         )
 
         results = self.engine.search(config)
@@ -293,11 +263,7 @@ class TestSearchEngine:
         new_dir, old_dir = test_files
 
         config = SearchConfig(
-            query="searchable",
-            use_regex=False,
-            case_sensitive=False,
-            new_folder=new_dir,
-            old_folder=old_dir
+            query="searchable", use_regex=False, case_sensitive=False, new_folder=new_dir, old_folder=old_dir
         )
 
         results = self.engine.search(config, context_lines=2)
@@ -320,11 +286,7 @@ class TestSearchEngine:
         new_dir, old_dir = test_files
 
         config = SearchConfig(
-            query="test",
-            use_regex=False,
-            case_sensitive=False,
-            new_folder=new_dir,
-            old_folder=old_dir
+            query="test", use_regex=False, case_sensitive=False, new_folder=new_dir, old_folder=old_dir
         )
 
         results = self.engine.search(config)
@@ -335,7 +297,7 @@ class TestSearchEngine:
             for match in result.matches:
                 if match.match_start >= 0 and match.match_end > match.match_start:
                     # Verify the position actually contains the match
-                    matched_text = match.line_content[match.match_start:match.match_end]
+                    matched_text = match.line_content[match.match_start : match.match_end]
                     assert "test" in matched_text.lower()
                     found_positioned_match = True
 
@@ -352,11 +314,7 @@ class TestSearchEngine:
             f.write(b"\x00\x01\x02\x03\x04")
 
         config = SearchConfig(
-            query="test",
-            use_regex=False,
-            case_sensitive=False,
-            new_folder=new_dir,
-            old_folder=old_dir
+            query="test", use_regex=False, case_sensitive=False, new_folder=new_dir, old_folder=old_dir
         )
 
         results = self.engine.search(config)
@@ -367,22 +325,21 @@ class TestSearchEngine:
         # Should still find matches in text files
         assert len(results) > 0
 
-    @pytest.mark.parametrize("query,expected_min_results", [
-        ("test", 1),
-        ("content", 1),
-        ("nonexistent", 0),
-        ("file", 1),
-    ])
+    @pytest.mark.parametrize(
+        "query,expected_min_results",
+        [
+            ("test", 1),
+            ("content", 1),
+            ("nonexistent", 0),
+            ("file", 1),
+        ],
+    )
     def test_search_various_queries(self, test_files, query, expected_min_results):
         """Test search with various query strings."""
         new_dir, old_dir = test_files
 
         config = SearchConfig(
-            query=query,
-            use_regex=False,
-            case_sensitive=False,
-            new_folder=new_dir,
-            old_folder=old_dir
+            query=query, use_regex=False, case_sensitive=False, new_folder=new_dir, old_folder=old_dir
         )
 
         results = self.engine.search(config)
@@ -407,7 +364,7 @@ class TestSearchEngine:
                 use_regex=False,
                 case_sensitive=False,
                 new_folder=test_dir,
-                old_folder="/tmp"  # Empty folder
+                old_folder="/tmp",  # Empty folder
             )
 
             results = self.engine.search(config)
@@ -428,11 +385,7 @@ class TestSearchEngine:
                 f.write("Emoji: 🔍 search test 🚀\n")
 
             config = SearchConfig(
-                query="测试",
-                use_regex=False,
-                case_sensitive=False,
-                new_folder=test_dir,
-                old_folder="/tmp"
+                query="测试", use_regex=False, case_sensitive=False, new_folder=test_dir, old_folder="/tmp"
             )
 
             results = self.engine.search(config)
@@ -445,11 +398,7 @@ class TestSearchEngine:
         new_dir, old_dir = test_files
 
         config = SearchConfig(
-            query="test",
-            use_regex=False,
-            case_sensitive=False,
-            new_folder=new_dir,
-            old_folder=old_dir
+            query="test", use_regex=False, case_sensitive=False, new_folder=new_dir, old_folder=old_dir
         )
 
         results1 = self.engine.search(config)
@@ -467,11 +416,7 @@ class TestSearchEngine:
     def test_search_with_mocked_file_operations(self):
         """Test search behavior with mocked file operations for error handling."""
         config = SearchConfig(
-            query="test",
-            use_regex=False,
-            case_sensitive=False,
-            new_folder="/test/new",
-            old_folder="/test/old"
+            query="test", use_regex=False, case_sensitive=False, new_folder="/test/new", old_folder="/test/old"
         )
 
         # Mock file operations to simulate various error conditions
@@ -486,11 +431,7 @@ class TestSearchEngine:
         new_dir, old_dir = test_files
 
         config = SearchConfig(
-            query="test",
-            use_regex=False,
-            case_sensitive=False,
-            new_folder=new_dir,
-            old_folder=old_dir
+            query="test", use_regex=False, case_sensitive=False, new_folder=new_dir, old_folder=old_dir
         )
 
         # Run search multiple times
@@ -517,7 +458,7 @@ class TestSearchEngine:
             use_regex=False,  # Literal search, not regex
             case_sensitive=False,
             new_folder=new_dir,
-            old_folder=old_dir
+            old_folder=old_dir,
         )
 
         results = self.engine.search(config)

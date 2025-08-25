@@ -12,7 +12,7 @@ class TestConfig:
         """Test that config uses correct default values."""
         config = Config()
         assert config.max_files == 5000
-        assert config.max_preview_chars == 500
+        assert config.max_preview_chars == 200
         assert config.max_render_lines == 5000
         assert config.refresh_interval == 1.0
         assert config.debounce_ms == 300
@@ -120,7 +120,7 @@ class TestConfig:
 
         assert "Config(" in repr_str
         assert "max_files=5000" in repr_str
-        assert "max_preview_chars=500" in repr_str
+        assert "max_preview_chars=200" in repr_str
         assert "max_render_lines=5000" in repr_str
         assert "refresh_interval=1.0" in repr_str
         assert "debounce_ms=300" in repr_str

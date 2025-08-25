@@ -126,7 +126,7 @@ class ScreenNavigator:
         file_path: str,
         line_no: int | None = None,
         keywords_path: str | None = None,
-        keywords_enabled: bool = False,
+        keywords_enabled: bool = True,
     ) -> None:
         """Open the File Viewer screen for a specific file.
 

@@ -1,0 +1,53 @@
+/* File Viewer Styling - Exact Copy of Stream Screen CSS */
+
+Screen {
+    background: $surface-darken-3;
+    color: $text;
+}
+
+/* Bold header with accent color */
+Header {
+    dock: top;
+    background: $panel-darken-2;
+    border-bottom: heavy $primary;
+    padding: 0 1;
+    text-style: bold;
+    color: $accent;
+}
+
+#viewer-main-scroll {
+    overflow: auto;
+    width: 100%;
+    align: left top;
+    padding: 0;
+}
+
+.file-panel {
+    border: round $primary;
+    height: auto;
+    background: $panel-darken-2;
+    margin: 0 1 1 1;
+    padding: 0;
+    width: 100%;
+    align: left top;
+}
+
+.file-command {
+    color: $accent;
+    align: left top;
+    text-style: bold;
+    border-bottom: solid $primary;
+    width: 100%;
+    text-opacity: 100%;
+    padding: 0 1 0 1;
+    margin: 0;
+}
+
+.file-content {
+    background: $panel-darken-1;
+    color: $text;
+    padding: 0 1;
+    border: round $accent;
+    margin: 0;
+    align: left top;
+}

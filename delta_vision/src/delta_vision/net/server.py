@@ -15,6 +15,8 @@ try:
 except ImportError:
     websockets = None
 
+from delta_vision.net.server_config import ConnectionLimiter, ServerConfig
+from delta_vision.utils.config import config
 from delta_vision.utils.logger import log
 
 # Track active child processes for clean shutdown
@@ -24,8 +26,17 @@ _SIGNALS_REGISTERED = False
 RESIZE_PREFIX = "RESIZE "
 
 
-async def handle_client(websocket, *, child_env: Optional[Dict[str, str]] = None, addr: Optional[str | tuple] = None):
-    """Handle a WebSocket client connection with PTY process management."""
+async def handle_client(
+    websocket, *, child_env: Optional[Dict[str, str]] = None, addr: Optional[str | tuple] = None, timeout: int = 300
+):
+    """Handle a WebSocket client connection with PTY process management.
+
+    Args:
+        websocket: The WebSocket connection
+        child_env: Optional environment variables for child process
+        addr: Client address information
+        timeout: Connection timeout in seconds (default: 300)
+    """
     # Setup PTY and spawn child process
     master_fd, proc = _setup_pty_and_process(child_env, addr)
 
@@ -108,7 +119,7 @@ def _create_io_handlers(websocket, master_fd: int, proc: subprocess.Popen, loop)
         """Forward PTY output to WebSocket."""
         try:
             while True:
-                data = await loop.run_in_executor(None, os.read, master_fd, 4096)
+                data = await loop.run_in_executor(None, os.read, master_fd, config.buffer_size)
                 if not data:
                     break
                 # Send as binary to preserve bytes
@@ -242,19 +253,33 @@ def _terminate_child_process(proc: subprocess.Popen, addr: Optional[str | tuple]
         log(f"[ERROR] Failed to log session outcome: {e}")
 
 
-async def start_server(*, port: int, child_env: Optional[Dict[str, str]] = None):
+async def start_server(
+    *, port: int = None, child_env: Optional[Dict[str, str]] = None, server_config: ServerConfig = None
+):
     """Start the WebSocket server for remote Delta Vision sessions.
 
     Creates a WebSocket server that spawns PTY sessions per client connection.
     Each client gets its own isolated Delta Vision process with terminal multiplexing.
 
     Args:
-        port: Port number to bind the WebSocket server to
+        port: Port number to bind the WebSocket server to (overrides config if specified)
         child_env: Optional environment variables to pass to child processes
+        server_config: Optional ServerConfig object for security settings
     """
     if websockets is None:
         print("Error: websockets module not available. Install with: pip install websockets")
         return
+
+    # Use provided config or create default (secure) configuration
+    if server_config is None:
+        server_config = ServerConfig()
+
+    # Override port if specified
+    if port is not None:
+        server_config.port = port
+
+    # Create connection limiter
+    connection_limiter = ConnectionLimiter(server_config.max_connections)
 
     serve = websockets.serve
     stop_event = asyncio.Event()
@@ -278,14 +303,25 @@ async def start_server(*, port: int, child_env: Optional[Dict[str, str]] = None)
         except (OSError, ValueError) as e:
             log(f"[ERROR] Failed to register signal handlers: {e}")
 
-    print(f"Delta Vision server listening on 0.0.0.0:{port}")
+    log(f"Delta Vision server starting on {server_config.bind_address}:{server_config.port}")
+    sys.stderr.write(f"Delta Vision server listening on {server_config.bind_address}:{server_config.port}\n")
 
     async def _handler(ws):
         # Best-effort peer address extraction
         peer = getattr(ws, "remote_address", None)
-        log(f"[server] client connected: {peer}")
+        connection_id = f"{peer[0]}:{peer[1]}" if peer else str(id(ws))
+
+        # Check connection limit before proceeding
+        if not connection_limiter.add_connection(connection_id):
+            log(f"[server] rejecting connection from {peer}: connection limit reached")
+            await ws.close(code=1008, reason="Connection limit reached")
+            return
+
+        active_count = connection_limiter.get_active_count()
+        max_conn = server_config.max_connections
+        log(f"[server] client connected: {peer} (active: {active_count}/{max_conn})")
         try:
-            return await handle_client(ws, child_env=child_env, addr=peer)
+            return await handle_client(ws, child_env=child_env, addr=peer, timeout=server_config.connection_timeout)
         except OSError as e:
             # Handle normal PTY closure gracefully
             if e.errno == 5:  # Input/output error
@@ -297,9 +333,14 @@ async def start_server(*, port: int, child_env: Optional[Dict[str, str]] = None)
             if "ConnectionClosed" not in str(type(e)):
                 log(f"[server] client session error: {peer} - {e}")
         finally:
-            log(f"[server] client disconnected: {peer}")
+            connection_limiter.remove_connection(connection_id)
+            active_count = connection_limiter.get_active_count()
+            max_conn = server_config.max_connections
+            log(f"[server] client disconnected: {peer} (active: {active_count}/{max_conn})")
 
-    async with serve(_handler, '0.0.0.0', port, ping_interval=20, max_size=None) as _server:
+    async with serve(
+        _handler, server_config.bind_address, server_config.port, ping_interval=20, max_size=None
+    ) as _server:
         try:
             # Wait until a signal asks us to stop
             await stop_event.wait()

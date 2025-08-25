@@ -25,8 +25,8 @@ from delta_vision.utils.config import config
 from delta_vision.utils.diff_engine import DiffRow, DiffType, compute_diff_rows
 from delta_vision.utils.file_parsing import parse_header_metadata, read_file_pair
 from delta_vision.utils.fs import format_mtime, get_mtime, minutes_between
+from delta_vision.utils.keyword_highlighter import KeywordHighlighter
 from delta_vision.utils.logger import log
-from delta_vision.utils.text import make_keyword_pattern
 from delta_vision.utils.watchdog import start_observer
 
 from .keywords_parser import parse_keywords_md
@@ -102,7 +102,8 @@ class SideBySideDiffScreen(BaseScreen):
         self._last_g = False
         # Keyword highlight state (enabled by default)
         self.keyword_highlight_enabled = True
-        self._kw_pattern = None
+        self._keyword_highlighter = KeywordHighlighter()
+        self._keywords_dict = None
         # Cache of built rows
         self._rows_cache = []
         # Per-side metadata parsed from header line
@@ -179,21 +180,13 @@ class SideBySideDiffScreen(BaseScreen):
         # Filesystem modified timestamps
         self._old_created = format_mtime(self.old_path)
         self._new_created = format_mtime(self.new_path)
-        # Build keyword pattern if provided
+        # Parse keywords dict if provided
         try:
             if self.keywords_path and os.path.isfile(self.keywords_path):
-                parsed = parse_keywords_md(self.keywords_path)
-                words: list[str] = []
-                for _cat, (_color, kws) in parsed.items():
-                    words.extend(kws)
-                self._kw_pattern = make_keyword_pattern(
-                    words,
-                    whole_word=True,
-                    case_insensitive=True,
-                )
+                self._keywords_dict = parse_keywords_md(self.keywords_path)
         except (OSError, re.error, ValueError):
-            log("Failed to build keyword pattern from keywords file")
-            self._kw_pattern = None
+            log("Failed to parse keywords file")
+            self._keywords_dict = None
 
         # Build tab set (latest vs others) and populate initial view
         try:
@@ -230,6 +223,7 @@ class SideBySideDiffScreen(BaseScreen):
 
     def _start_file_observers(self):
         """Start file system observers for both files."""
+
         def trigger_refresh():
             """Callback for filesystem changes."""
             try:
@@ -816,25 +810,24 @@ class SideBySideDiffScreen(BaseScreen):
             # Keep whitespace as tokens so we can reconstruct spacing
             return re.split(r"(\s+)", s)
 
-        def underline_keywords(s: str) -> str:
-            # Insert [u]...[/u] around keyword matches, escaping non-matching text
-            pat = self._kw_pattern if (self.keyword_highlight_enabled and self._kw_pattern) else None
-            if not pat:
+        def highlight_keywords(s: str) -> str:
+            # Apply keyword highlighting with colors from keywords.md
+            if not (self.keyword_highlight_enabled and self._keywords_dict):
                 return escape(s)
-            out: list[str] = []
-            last = 0
-            for m in pat.finditer(s):
-                out.append(escape(s[last : m.start()]))
-                out.append(f"[u]{escape(m.group(0))}[/u]")
-                last = m.end()
-            out.append(escape(s[last:]))
-            return "".join(out)
+
+            # Use KeywordHighlighter to get pattern and color lookup
+            pattern, keyword_lookup = self._keyword_highlighter.get_pattern_and_lookup(self._keywords_dict)
+            if not pattern:
+                return escape(s)
+
+            # Apply highlighting with colors (no underline to avoid clutter in diff view)
+            return self._keyword_highlighter.highlight_line(s, pattern, keyword_lookup, underline=False)
 
         def process_token(tok: str) -> str:
-            # Preserve whitespace tokens; otherwise apply keyword underline
+            # Preserve whitespace tokens; otherwise apply keyword highlighting
             if tok.isspace():
                 return tok
-            return underline_keywords(tok)
+            return highlight_keywords(tok)
 
         def word_diff(old_text: str, new_text: str) -> tuple[str, str]:
             """Return (left_markup, right_markup) with word-level coloring.

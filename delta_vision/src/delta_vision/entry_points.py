@@ -9,8 +9,10 @@ from textual.app import App
 
 from delta_vision.net.client import start_client
 from delta_vision.net.server import start_server
+from delta_vision.net.server_config import ServerConfig
 from delta_vision.screens.main_screen import MainScreen
 from delta_vision.themes import register_all_themes
+from delta_vision.utils.config import PathsConfig
 from delta_vision.utils.logger import log
 from delta_vision.utils.validation import ValidationError, validate_config_paths, validate_network_config, validate_port
 
@@ -77,18 +79,11 @@ class HomeApp(App):
                 # Ultimate fallback - store as instance variable
                 self._theme = 'textual-dark'
 
-    def __init__(
-        self,
-        new_folder_path=None,
-        old_folder_path=None,
-        keywords_path=None,
-    ):
+    def __init__(self, paths_config: PathsConfig):
         """Initialize the main Delta Vision application.
 
         Args:
-            new_folder_path: Path to the 'NEW' folder for comparison operations
-            old_folder_path: Path to the 'OLD' folder for comparison operations
-            keywords_path: Path to the keywords.md file for keyword highlighting
+            paths_config: Configuration object containing all path settings
         """
         super().__init__()
 
@@ -96,9 +91,7 @@ class HomeApp(App):
         self.theme = 'textual-dark'
 
         # Store configuration
-        self.new_folder_path = new_folder_path
-        self.old_folder_path = old_folder_path
-        self.keywords_path = keywords_path
+        self.paths_config = paths_config
 
         # Register themes immediately after App initialization
         self._register_themes_safely()
@@ -137,7 +130,7 @@ class HomeApp(App):
         Theme registration is handled during __init__ for proper initialization order.
         """
         # Push main screen (themes already registered in __init__)
-        self.push_screen(MainScreen(self.new_folder_path, self.old_folder_path, self.keywords_path))
+        self.push_screen(MainScreen(self.paths_config))
 
 
 def _create_argument_parser():
@@ -150,6 +143,13 @@ def _create_argument_parser():
     parser.add_argument('--client', action='store_true', help='Connect as a network client')
     parser.add_argument('--port', type=int, default=8765, help='Port for server or client connection')
     parser.add_argument('--host', type=str, default='localhost', help='Host for client connection')
+    parser.add_argument(
+        '--bind-address',
+        type=str,
+        default='127.0.0.1',
+        help='Bind address for server (default: 127.0.0.1 for security)',
+    )
+    parser.add_argument('--max-connections', type=int, default=10, help='Maximum concurrent connections for server')
     return parser
 
 
@@ -214,12 +214,14 @@ def _validate_configuration(args):
             args.port = validate_port(args.port, "Port")
 
     except ValidationError as e:
-        print(f"Configuration Error: {e}", file=sys.stderr)
-        print("\nPlease check your arguments and try again.", file=sys.stderr)
-        print("Use --help for usage information.", file=sys.stderr)
+        log(f"Configuration validation failed: {e}")
+        sys.stderr.write(f"Configuration Error: {e}\n")
+        sys.stderr.write("\nPlease check your arguments and try again.\n")
+        sys.stderr.write("Use --help for usage information.\n")
         sys.exit(1)
     except Exception as e:
-        print(f"Unexpected validation error: {e}", file=sys.stderr)
+        log(f"Unexpected validation error: {e}")
+        sys.stderr.write(f"Unexpected validation error: {e}\n")
         sys.exit(1)
 
 
@@ -236,22 +238,32 @@ def _execute_mode(args):
             }.items()
             if v
         }
-        print(f"Starting server on port {args.port}...")
+        # Create server configuration with security settings
+        server_config = ServerConfig(
+            bind_address=getattr(args, 'bind_address', '127.0.0.1'),
+            port=args.port,
+            max_connections=getattr(args, 'max_connections', 10),
+        )
+        log(f"Starting Delta Vision server on {server_config.bind_address}:{server_config.port}")
+        sys.stderr.write(f"Delta Vision server starting on {server_config.bind_address}:{server_config.port}...\n")
         try:
-            asyncio.run(start_server(port=args.port, child_env=child_env))
+            asyncio.run(start_server(port=args.port, child_env=child_env, server_config=server_config))
         except KeyboardInterrupt:
-            print("\n[delta-vision] Server stopped by user")
+            log("Server stopped by user (KeyboardInterrupt)")
+            sys.stderr.write("\n[delta-vision] Server stopped by user\n")
             # Ignore any further Ctrl+C presses during cleanup
             _ignore_further_interrupts()
             # Give a small delay to allow background threads to finish
             time.sleep(0.2)
             return
     elif args.client:
-        print(f"Connecting to server at {args.host}:{args.port}...")
+        log(f"Starting Delta Vision client, connecting to {args.host}:{args.port}")
+        sys.stderr.write(f"Connecting to Delta Vision server at {args.host}:{args.port}...\n")
         try:
             asyncio.run(start_client(host=args.host, port=args.port))
         except KeyboardInterrupt:
-            print("\n[delta-vision] Client stopped by user")
+            log("Client stopped by user (KeyboardInterrupt)")
+            sys.stderr.write("\n[delta-vision] Client stopped by user\n")
             # Ignore any further Ctrl+C presses during cleanup
             _ignore_further_interrupts()
             # Give a small delay to allow background threads to finish
@@ -260,18 +272,17 @@ def _execute_mode(args):
         except Exception as e:
             # Handle other client connection errors
             if "ConnectionRefused" in str(type(e)) or "connection refused" in str(e).lower():
-                print(f"Error: Cannot connect to server at {args.host}:{args.port}")
-                print("Make sure the server is running with: python -m delta_vision --server")
+                log(f"Client connection refused to {args.host}:{args.port}: {e}")
+                sys.stderr.write(f"Error: Cannot connect to server at {args.host}:{args.port}\n")
+                sys.stderr.write("Make sure the server is running with: python -m delta_vision --server\n")
             else:
-                print(f"Client error: {e}")
+                log(f"Client connection error: {e}")
+                sys.stderr.write(f"Client error: {e}\n")
             return
     else:
         # Default to local TUI mode
-        HomeApp(
-            new_folder_path=args.new,
-            old_folder_path=args.old,
-            keywords_path=args.keywords,
-        ).run()
+        paths_config = PathsConfig.from_args(args)
+        HomeApp(paths_config).run()
 
 
 def main():

@@ -6,19 +6,24 @@ import re
 from rich.text import Text
 from textual.app import ComposeResult
 from textual.containers import Vertical
-from textual.widgets import ListItem, ListView, Static
+from textual.screen import Screen
+from textual.widgets import ListItem, Static
 
-from delta_vision.utils.base_screen import BaseScreen
+from delta_vision.utils.config import config
 from delta_vision.utils.io import read_lines
 from delta_vision.utils.keyword_highlighter import highlighter
 from delta_vision.utils.logger import log
 from delta_vision.utils.watchdog import start_observer
+from delta_vision.widgets.footer import Footer
+from delta_vision.widgets.header import Header
 
 from .keywords_parser import parse_keywords_md
 
 
-class FileViewerScreen(BaseScreen):
+class FileViewerScreen(Screen):
     """Simple file viewer that opens a file and jumps to a specific line."""
+
+    CSS_PATH = "viewer.tcss"
 
     BINDINGS = [
         ("q", "go_back", "Back"),
@@ -28,7 +33,7 @@ class FileViewerScreen(BaseScreen):
         ("ctrl+k", "toggle_keywords", "Keywords"),
     ]
 
-    CSS_PATH = "stream.tcss"
+    CSS_PATH = "viewer.tcss"
 
     def __init__(
         self,
@@ -36,47 +41,50 @@ class FileViewerScreen(BaseScreen):
         line_no: int = 1,
         title: str | None = None,
         keywords_path: str | None = None,
-        keywords_enabled: bool = False,
+        keywords_enabled: bool = True,
     ):
-        page_name = title or f"Viewer — {os.path.basename(file_path)}"
-        super().__init__(page_name=page_name)
+        super().__init__()
+        self.page_name = title or f"Viewer — {os.path.basename(file_path)}"
+        self.title = f"Delta Vision — {self.page_name}"
         self.file_path = file_path
         self.line_no = max(1, int(line_no or 1))
         # UI refs
-        self._list = None
+        self._file_panel = None
         # Keyword highlighting
         self.keywords_path = keywords_path
         self.keywords_dict = None
         self.keyword_highlight_enabled = keywords_enabled
-        # Cached state for smooth repaints
+        # Cached state
         self._display_lines = []
         self._keyword_lookup = {}
         self._sorted_keywords = []
-        self._line_widgets = []
-        self._target_index = 0
         # Vim-like navigation support (double 'g')
         self._last_g = False
         # Render limits
-        self._max_render_lines = 5000
+        self._max_render_lines = config.max_render_lines
         # Watchdog observer for live updates
         self._observer = None
         self._stop_observer = None
 
-    def compose_main_content(self) -> ComposeResult:
-        with Vertical(id="viewer-root"):
-            with Vertical(classes="file-panel"):
-                yield Static("", id="viewer-title", classes="file-title")
-                yield Static("", id="viewer-subtitle", classes="file-subtitle")
-                with Vertical(classes="file-content"):
-                    self._list = ListView(id="viewer-list")
-                    yield self._list
+    def compose(self) -> ComposeResult:
+        # Standard header
+        yield Header(page_name=self.page_name, show_clock=True)
+
+        # Main content exactly like stream screen - simple scrollable container
+        yield Vertical(id="viewer-main-scroll")
+
+        # Standard footer
+        yield Footer(text=self.get_footer_text())
 
     def get_footer_text(self) -> str:
         keywords_state = "ON" if self.keyword_highlight_enabled else "OFF"
         return f" [orange1]q[/orange1] Back    [orange1]Ctrl+K[/orange1] Keywords: {keywords_state}"
 
+    def action_go_back(self):
+        """Go back to the previous screen."""
+        self.app.pop_screen()
+
     async def on_mount(self):
-        await super().on_mount()  # This sets the title
         content, _enc = read_lines(self.file_path)
         if not content:
             content = ["[Error reading file]"]
@@ -99,66 +107,63 @@ class FileViewerScreen(BaseScreen):
             display_lines = all_display_lines
         self._display_lines = display_lines
 
-        # Compute target index (line 2 maps to index 0)
-        if self.line_no <= 1:
-            target_index = 0 if display_lines else 0
-        else:
-            target_index = max(0, min(len(display_lines) - 1, self.line_no - 2))
-        self._target_index = target_index
+        # Build keyword caches
+        self._keyword_lookup = {}
+        if self.keywords_dict:
+            for _cat, (color, words) in self.keywords_dict.items():
+                for w in words:
+                    self._keyword_lookup[w] = color
+        self._sorted_keywords = (
+            sorted(self._keyword_lookup.keys(), key=len, reverse=True) if self._keyword_lookup else []
+        )
 
-        # Update title with command from header line (between quotes)
+        # Create title from header line (between quotes) - exactly like stream screen
+        header_line = content[0] if content else ""
+        cmd_match = re.search(r'"([^"]+)"', header_line) if header_line else None
+        title_text = cmd_match.group(1) if cmd_match else self.page_name
+
+        # Add truncation info to the title if needed
+        if truncated:
+            total = len(all_display_lines)
+            shown = len(display_lines)
+            title_text = f"{title_text} (Showing {shown} of {total} lines)"
+
+        # Create content with line numbers - exactly like stream screen
+        content_lines = []
+        for i, line in enumerate(display_lines):
+            # Create display content with line numbers
+            line_display = f"{i + 2:4}│ {line}"
+
+            # Apply keyword highlighting if enabled
+            if self.keyword_highlight_enabled and self._sorted_keywords:
+                line_display = self._apply_keyword_highlighting(line_display)
+
+            content_lines.append(line_display)
+
+        content_with_numbers = "\n".join(content_lines)
+
+        # Get the scroll container and mount the file panel - exactly like stream screen
         try:
-            title_widget = self.query_one('#viewer-title', Static)
-            subtitle_widget = self.query_one('#viewer-subtitle', Static)
-            header_line = content[0] if content else ""
-            cmd_match = re.search(r'"([^"]+)"', header_line) if header_line else None
-            title_text = cmd_match.group(1) if cmd_match else self.viewer_title
-            title_widget.update(title_text)
-            if truncated:
-                total = len(all_display_lines)
-                shown = len(display_lines)
-                subtitle_widget.update(f"Showing {shown} of {total} lines (truncated)")
-            else:
-                subtitle_widget.update("")
-        except (AttributeError, RuntimeError):
-            log("Failed to update title and subtitle widgets")
-            pass
+            scroll_container = self.query_one('#viewer-main-scroll')
 
-        if self._list is not None:
-            try:
-                self._list.clear()
-            except (AttributeError, RuntimeError):
-                log("Failed to clear list widget")
-                pass
+            # Create file panel with same structure as stream screen
+            file_panel = Vertical(
+                Static(title_text, classes="file-command"),
+                Static(content_with_numbers, classes="file-content", markup=True),
+                classes="file-panel",
+            )
 
-            # Build keyword caches
-            self._keyword_lookup = {}
-            if self.keywords_dict:
-                for _cat, (color, words) in self.keywords_dict.items():
-                    for w in words:
-                        self._keyword_lookup[w] = color
-            self._sorted_keywords = sorted(self._keyword_lookup.keys(), key=len, reverse=True)
-
-            # Build line widgets and keep references for smooth repaint
-            self._line_widgets = []
-            for i, line in enumerate(self._display_lines):
-                markup = self._render_markup_for_line(i, line)
-                static = Static(Text.from_markup(markup))
-                self._line_widgets.append(static)
-                self._list.append(ListItem(static))
-
-            # Set initial selection/scroll
-            try:
-                self._list.index = target_index
-            except (AttributeError, ValueError, IndexError):
-                log(f"Failed to set list index to {target_index}")
-                pass
+            scroll_container.mount(file_panel)
+            self._file_panel = file_panel
+        except Exception as e:
+            log(f"Failed to create file panel: {e}")
 
         # Start watchdog observer for live updates
         self._start_file_observer()
 
     def _start_file_observer(self):
         """Start file system observer for the viewed file."""
+
         def trigger_refresh():
             """Callback for filesystem changes."""
             try:
@@ -308,77 +313,30 @@ class FileViewerScreen(BaseScreen):
 
     # --- Actions for help/discoverability ---
     def action_next_line(self):
-        lv = self._list
-        if not lv:
-            return
+        """Scroll down by one line."""
         try:
-            self.safe_set_focus(lv)
-        except (AttributeError, RuntimeError):
-            log("Failed to set focus on list view in next_line")
-            pass
-        try:
-            cur = getattr(lv, 'index', 0) or 0
-        except AttributeError:
-            log("Failed to get current list index in next_line")
-            cur = 0
-        total = len(self._display_lines) if self._display_lines else 0
-        if total:
-            try:
-                new_i = min(cur + 1, total - 1)
-                lv.index = new_i
-                scroll_to_index = getattr(lv, 'scroll_to_index', None)
-                if callable(scroll_to_index):
-                    scroll_to_index(new_i)
-            except (AttributeError, ValueError, IndexError):
-                log(f"Failed to move to next line (index {cur + 1})")
-                pass
+            scroll_container = self.query_one('#viewer-main-scroll')
+            scroll_container.scroll_down(animate=False)
+        except Exception as e:
+            log(f"Failed to scroll down: {e}")
         self._last_g = False
 
     def action_prev_line(self):
-        lv = self._list
-        if not lv:
-            return
+        """Scroll up by one line."""
         try:
-            self.safe_set_focus(lv)
-        except (AttributeError, RuntimeError):
-            log("Failed to set focus on list view in prev_line")
-            pass
-        try:
-            cur = getattr(lv, 'index', 0) or 0
-        except AttributeError:
-            log("Failed to get current list index in prev_line")
-            cur = 0
-        if True:
-            try:
-                new_i = max(cur - 1, 0)
-                lv.index = new_i
-                scroll_to_index = getattr(lv, 'scroll_to_index', None)
-                if callable(scroll_to_index):
-                    scroll_to_index(new_i)
-            except (AttributeError, ValueError, IndexError):
-                log(f"Failed to move to previous line (index {cur - 1})")
-                pass
+            scroll_container = self.query_one('#viewer-main-scroll')
+            scroll_container.scroll_up(animate=False)
+        except Exception as e:
+            log(f"Failed to scroll up: {e}")
         self._last_g = False
 
     def action_end(self):
-        lv = self._list
-        if not lv:
-            return
+        """Scroll to the end of the content."""
         try:
-            self.safe_set_focus(lv)
-        except (AttributeError, RuntimeError):
-            log("Failed to set focus on list view in end")
-            pass
-        total = len(self._display_lines) if self._display_lines else 0
-        if total:
-            try:
-                lv.index = total - 1
-                scroll_to_index = getattr(lv, 'scroll_to_index', None)
-                if callable(scroll_to_index):
-                    scroll_to_index(total - 1)
-            except (AttributeError, ValueError, IndexError):
-                log(f"Failed to jump to end (index {total - 1})")
-                pass
+            scroll_container = self.query_one('#viewer-main-scroll')
+            scroll_container.scroll_end(animate=False)
+        except Exception as e:
+            log(f"Failed to scroll to end: {e}")
         self._last_g = False
 
     def action_toggle_keywords(self):
@@ -412,12 +370,38 @@ class FileViewerScreen(BaseScreen):
         return left + content
 
     def _repaint_highlighting(self):
-        # Update text of existing items in place to avoid flashing
+        """Update highlighting in the content Static widget."""
         try:
-            for i, static in enumerate(self._line_widgets):
-                if i < len(self._display_lines):
-                    markup = self._render_markup_for_line(i, self._display_lines[i])
-                    static.update(Text.from_markup(markup))
-        except (AttributeError, ValueError, IndexError, UnicodeError):
-            log("Failed to repaint highlighting")
+            if not hasattr(self, '_file_panel') or not hasattr(self, '_display_lines'):
+                return
+
+            # Regenerate content with current keyword highlighting state
+            content_lines = []
+            for i, line in enumerate(self._display_lines):
+                # Create display content with line numbers
+                line_display = f"{i + 2:4}│ {line}"
+
+                # Apply keyword highlighting if enabled
+                if self.keyword_highlight_enabled and self._sorted_keywords:
+                    line_display = self._apply_keyword_highlighting(line_display)
+
+                content_lines.append(line_display)
+
+            content_with_numbers = "\n".join(content_lines)
+
+            # Update the file-content Static widget
+            content_widget = self._file_panel.query_one('.file-content', Static)
+            content_widget.update(content_with_numbers)
+
+        except (AttributeError, ValueError, IndexError, UnicodeError) as e:
+            log(f"Failed to repaint highlighting: {e}")
             pass
+
+    def _apply_keyword_highlighting(self, text: str) -> str:
+        """Apply keyword highlighting to text using the centralized highlighter."""
+        if not self.keywords_dict or not self._sorted_keywords:
+            return text
+
+        return highlighter.highlight_with_color_lookup(
+            text, self._sorted_keywords, self._keyword_lookup, case_sensitive=False
+        )

@@ -25,8 +25,7 @@ def log_file_error(file_path: str, operation: str, exception: Exception) -> None
     log(f"[IO] Failed {operation} {file_path}: {error_type}: {exception}")
 
 
-def log_network_error(host: str, port: int, operation: str,
-                      exception: Exception, prefix: str = "NET") -> None:
+def log_network_error(host: str, port: int, operation: str, exception: Exception, prefix: str = "NET") -> None:
     """Log network operation errors with consistent formatting.
 
     This consolidates the duplicate network error logging patterns found
@@ -72,8 +71,7 @@ def log_ui_error(component: str, action: str, exception: Exception) -> None:
     log(f"[UI] Failed {action} on {component}: {error_type}: {exception}")
 
 
-def log_process_error(process_name: str, operation: str,
-                     exception: Exception, pid: Optional[int] = None) -> None:
+def log_process_error(process_name: str, operation: str, exception: Exception, pid: Optional[int] = None) -> None:
     """Log process operation errors with consistent formatting.
 
     This consolidates the duplicate process error logging patterns found
@@ -132,8 +130,7 @@ def log_watchdog_error(path: str, operation: str, exception: Exception) -> None:
     log(f"[WATCHDOG] Failed {operation} for {path}: {error_type}: {exception}")
 
 
-def log_generic_error(context: str, operation: str, exception: Exception,
-                     prefix: Optional[str] = None) -> None:
+def log_generic_error(context: str, operation: str, exception: Exception, prefix: Optional[str] = None) -> None:
     """Log generic errors with consistent formatting.
 
     This is a fallback for error patterns that don't fit other categories.
@@ -151,6 +148,7 @@ def log_generic_error(context: str, operation: str, exception: Exception,
 
 # Convenience functions for common error patterns
 
+
 def log_failed_operation(operation: str, exception: Exception) -> None:
     """Log a simple failed operation.
 
@@ -163,8 +161,7 @@ def log_failed_operation(operation: str, exception: Exception) -> None:
     log(f"Failed to {operation}: {exception}")
 
 
-def log_error_with_context(message: str, exception: Exception,
-                          context: Optional[dict] = None) -> None:
+def log_error_with_context(message: str, exception: Exception, context: Optional[dict] = None) -> None:
     """Log an error with additional context information.
 
     Args:

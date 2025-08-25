@@ -13,6 +13,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Callable
 
+from .config import config
 from .io import read_text
 from .logger import log
 
@@ -41,15 +42,15 @@ class ScanResult:
 class KeywordScanner:
     """Background keyword scanner with thread-safe operations."""
 
-    def __init__(self, max_files: int = 5000, max_preview_chars: int = 200):
+    def __init__(self, max_files: int = None, max_preview_chars: int = None):
         """Initialize the keyword scanner with configurable limits.
 
         Args:
-            max_files: Maximum number of files to scan per operation (default: 5000)
-            max_preview_chars: Maximum characters in keyword match previews (default: 200)
+            max_files: Maximum number of files to scan per operation (default: from config)
+            max_preview_chars: Maximum characters in keyword match previews (default: from config)
         """
-        self.max_files = max_files
-        self.max_preview_chars = max_preview_chars
+        self.max_files = max_files if max_files is not None else config.max_files
+        self.max_preview_chars = max_preview_chars if max_preview_chars is not None else config.max_preview_chars
 
         # Threading state
         self._scan_thread: threading.Thread | None = None

@@ -57,6 +57,7 @@ class TestBaseScreen:
     @pytest.fixture
     def base_screen_app(self):
         """Create an app with a BaseScreen for testing."""
+
         class TestApp(App):
             def __init__(self):
                 super().__init__()
@@ -188,6 +189,7 @@ class TestBaseTableScreen:
     @pytest.fixture
     def base_table_screen_app(self):
         """Create an app with a BaseTableScreen for testing."""
+
         class TestApp(App):
             def __init__(self):
                 super().__init__()
@@ -310,6 +312,7 @@ class TestBaseScreenIntegration:
     @pytest.mark.asyncio
     async def test_screen_switching(self):
         """Test switching between different screen types."""
+
         class MultiScreenApp(App):
             def __init__(self):
                 super().__init__()
@@ -356,6 +359,7 @@ class TestBaseScreenIntegration:
     @pytest.mark.asyncio
     async def test_base_screen_lifecycle(self):
         """Test base screen lifecycle methods."""
+
         class LifecycleTestApp(App):
             def __init__(self):
                 super().__init__()
@@ -396,10 +400,12 @@ class TestBaseScreenIntegration:
 
     def test_base_screen_composition_requirements(self):
         """Test that base screen composition requirements are enforced."""
+
         # BaseScreen requires compose_main_content implementation
         class IncompleteScreen(BaseScreen):
             def get_footer_text(self) -> str:
                 return "Test"
+
             # Missing compose_main_content
 
         # Should not be able to instantiate incomplete screen
@@ -408,10 +414,12 @@ class TestBaseScreenIntegration:
 
     def test_base_screen_footer_text_requirements(self):
         """Test that footer text is properly required."""
+
         # BaseScreen requires get_footer_text implementation
         class IncompleteScreen(BaseScreen):
             def compose_main_content(self):
                 yield Static("test")
+
             # Missing get_footer_text
 
         # Should not be able to instantiate incomplete screen
@@ -421,6 +429,7 @@ class TestBaseScreenIntegration:
     @pytest.mark.asyncio
     async def test_base_screen_widget_interaction(self):
         """Test interaction with widgets in base screens."""
+
         class InteractiveTestApp(App):
             def __init__(self):
                 super().__init__()
@@ -466,10 +475,12 @@ class TestBaseScreenIntegration:
 
         # Should not crash (memory should be reclaimable)
         import gc
+
         gc.collect()
 
     def test_base_screen_customization(self):
         """Test that base screens can be customized properly."""
+
         class CustomBaseScreen(ConcreteBaseScreen):
             def __init__(self):
                 super().__init__()
@@ -488,6 +499,7 @@ class TestBaseScreenIntegration:
         themes_to_test = ['textual-dark', 'textual-light']
 
         for theme in themes_to_test:
+
             class ThemedTestApp(App):
                 def __init__(self, theme_name=theme):
                     super().__init__()

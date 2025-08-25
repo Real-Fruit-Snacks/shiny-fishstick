@@ -13,6 +13,7 @@ from textual.containers import Center, Horizontal, Vertical
 from textual.widgets import Button, Static
 
 from delta_vision.utils.base_screen import BaseScreen
+from delta_vision.utils.config import PathsConfig
 from delta_vision.utils.screen_navigation import create_navigator
 
 
@@ -32,11 +33,9 @@ class MainScreen(BaseScreen):
         ("4", "open_compare", "Compare"),
     ]
 
-    def __init__(self, new_folder_path=None, old_folder_path=None, keywords_path=None):
+    def __init__(self, paths_config: PathsConfig):
         super().__init__(page_name="Home")
-        self.new_folder_path = new_folder_path
-        self.old_folder_path = old_folder_path
-        self.keywords_path = keywords_path
+        self.paths_config = paths_config
         self._navigator = None
 
     def compose_main_content(self) -> ComposeResult:
@@ -117,26 +116,26 @@ class MainScreen(BaseScreen):
         """Open the live Stream screen (tail NEW files with highlights)."""
         if self._navigator:
             self._navigator.open_stream_screen(
-                folder_path=self.new_folder_path,
-                keywords_path=self.keywords_path,
+                folder_path=self.paths_config.new_folder_path,
+                keywords_path=self.paths_config.keywords_path,
             )
 
     def action_open_search(self):
         """Open the Search screen (query across NEW and OLD)."""
         if self._navigator:
             self._navigator.open_search_screen(
-                new_folder_path=self.new_folder_path,
-                old_folder_path=self.old_folder_path,
-                keywords_path=self.keywords_path,
+                new_folder_path=self.paths_config.new_folder_path,
+                old_folder_path=self.paths_config.old_folder_path,
+                keywords_path=self.paths_config.keywords_path,
             )
 
     def action_open_keywords(self):
         """Open the Keywords screen (manage categories and terms)."""
         if self._navigator:
             self._navigator.open_keywords_screen(
-                new_folder_path=self.new_folder_path,
-                old_folder_path=self.old_folder_path,
-                keywords_path=self.keywords_path,
+                new_folder_path=self.paths_config.new_folder_path,
+                old_folder_path=self.paths_config.old_folder_path,
+                keywords_path=self.paths_config.keywords_path,
             )
 
     def action_open_compare(self):
@@ -147,9 +146,9 @@ class MainScreen(BaseScreen):
         """
         if self._navigator:
             self._navigator.open_compare_screen(
-                new_folder_path=self.new_folder_path,
-                old_folder_path=self.old_folder_path,
-                keywords_path=self.keywords_path,
+                new_folder_path=self.paths_config.new_folder_path,
+                old_folder_path=self.paths_config.old_folder_path,
+                keywords_path=self.paths_config.keywords_path,
             )
 
     def on_button_pressed(self, event):

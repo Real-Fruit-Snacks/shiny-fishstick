@@ -529,4 +529,3 @@ class CompareScreen(BaseTableScreen):
             pass
 
     # --- Actions for help/discoverability ---
-

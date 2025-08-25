@@ -18,6 +18,7 @@ import pytest
 try:
     from delta_vision.net.client import connect_to_server, start_client
     from delta_vision.net.server import handle_client, setup_signal_handlers, start_server
+
     NETWORKING_AVAILABLE = True
 except ImportError:
     NETWORKING_AVAILABLE = False
@@ -41,10 +42,7 @@ class TestServerFunctionality:
             mock_serve.return_value = AsyncMock()
 
             # Mock environment variables
-            with patch.dict(os.environ, {
-                'DELTA_NEW': '/tmp/new',
-                'DELTA_OLD': '/tmp/old'
-            }):
+            with patch.dict(os.environ, {'DELTA_NEW': '/tmp/new', 'DELTA_OLD': '/tmp/old'}):
                 # Should not crash with valid parameters
                 try:
                     await start_server(port=8765, new_folder='/tmp/new', old_folder='/tmp/old')
@@ -94,11 +92,7 @@ class TestServerFunctionality:
                     with patch('delta_vision.net.server.os.close'):
                         # Should handle client without crashing
                         try:
-                            await handle_client(
-                                websocket=mock_websocket,
-                                new_folder='/tmp/new',
-                                old_folder='/tmp/old'
-                            )
+                            await handle_client(websocket=mock_websocket, new_folder='/tmp/new', old_folder='/tmp/old')
                         except Exception as e:
                             # Some exceptions are expected in test environment
                             if "Connection closed" not in str(e):
@@ -108,12 +102,7 @@ class TestServerFunctionality:
     def test_server_environment_handling(self):
         """Test server behavior with various environment configurations."""
         # Test with required environment variables
-        env_vars = {
-            'DELTA_NEW': '/tmp/new',
-            'DELTA_OLD': '/tmp/old',
-            'DELTA_HOST': 'localhost',
-            'DELTA_PORT': '8765'
-        }
+        env_vars = {'DELTA_NEW': '/tmp/new', 'DELTA_OLD': '/tmp/old', 'DELTA_HOST': 'localhost', 'DELTA_PORT': '8765'}
 
         with patch.dict(os.environ, env_vars):
             # Server should be able to read environment variables
@@ -138,11 +127,7 @@ class TestServerFunctionality:
                 with patch('delta_vision.net.server.os.close') as mock_close:
                     with patch('delta_vision.net.server.os.read', side_effect=OSError("Connection closed")):
                         try:
-                            await handle_client(
-                                websocket=mock_websocket,
-                                new_folder='/tmp/new',
-                                old_folder='/tmp/old'
-                            )
+                            await handle_client(websocket=mock_websocket, new_folder='/tmp/new', old_folder='/tmp/old')
                         except Exception:
                             pass  # Expected in test environment
 
@@ -183,11 +168,7 @@ class TestServerFunctionality:
         # Test with PTY creation failure
         with patch('delta_vision.net.server.pty.openpty', side_effect=OSError("PTY creation failed")):
             try:
-                await handle_client(
-                    websocket=mock_websocket,
-                    new_folder='/tmp/new',
-                    old_folder='/tmp/old'
-                )
+                await handle_client(websocket=mock_websocket, new_folder='/tmp/new', old_folder='/tmp/old')
             except Exception:
                 # Should handle PTY creation errors gracefully
                 pass  # Expected behavior
@@ -196,11 +177,7 @@ class TestServerFunctionality:
         with patch('delta_vision.net.server.pty.openpty', return_value=(1, 2)):
             with patch('delta_vision.net.server.subprocess.Popen', side_effect=OSError("Process creation failed")):
                 try:
-                    await handle_client(
-                        websocket=mock_websocket,
-                        new_folder='/tmp/new',
-                        old_folder='/tmp/old'
-                    )
+                    await handle_client(websocket=mock_websocket, new_folder='/tmp/new', old_folder='/tmp/old')
                 except Exception:
                     # Should handle process creation errors gracefully
                     pass  # Expected behavior
@@ -306,11 +283,7 @@ class TestClientFunctionality:
 
     def test_client_environment_configuration(self):
         """Test client environment variable configuration."""
-        env_vars = {
-            'DELTA_HOST': 'remote-server.example.com',
-            'DELTA_PORT': '9876',
-            'DELTA_MODE': 'client'
-        }
+        env_vars = {'DELTA_HOST': 'remote-server.example.com', 'DELTA_PORT': '9876', 'DELTA_MODE': 'client'}
 
         with patch.dict(os.environ, env_vars):
             # Client should be able to read configuration
@@ -368,7 +341,7 @@ class TestNetworkingIntegration:
         valid_configs = [
             {'host': 'localhost', 'port': 8765},
             {'host': '127.0.0.1', 'port': 9000},
-            {'host': 'server.example.com', 'port': 8080}
+            {'host': 'server.example.com', 'port': 8080},
         ]
 
         for config in valid_configs:
@@ -385,7 +358,7 @@ class TestNetworkingIntegration:
             ConnectionRefusedError("Server not available"),
             ConnectionAbortedError("Connection aborted"),
             TimeoutError("Connection timeout"),
-            OSError("Network unreachable")
+            OSError("Network unreachable"),
         ]
 
         for error in error_scenarios:
@@ -397,11 +370,7 @@ class TestNetworkingIntegration:
     def test_networking_security_considerations(self):
         """Test networking security considerations."""
         # Test that sensitive information is not logged
-        sensitive_data = [
-            "password123",
-            "/home/user/.ssh/id_rsa",
-            "SECRET_API_KEY=abc123"
-        ]
+        sensitive_data = ["password123", "/home/user/.ssh/id_rsa", "SECRET_API_KEY=abc123"]
 
         # Networking code should not expose sensitive data
         for data in sensitive_data:
@@ -452,6 +421,7 @@ class TestNetworkingIntegration:
     @pytest.mark.asyncio
     async def test_networking_timeout_handling(self):
         """Test networking timeout handling."""
+
         # Test connection timeout
         async def slow_operation():
             await asyncio.sleep(2.0)  # Simulate slow operation
@@ -471,8 +441,8 @@ class TestNetworkingIntegration:
         test_data = [
             "Simple ASCII text",
             "Unicode: 测试内容 αβγδε 🚀",
-            "Binary-like: \x00\x01\x02\xFF",
-            "Large text: " + "A" * 1000
+            "Binary-like: \x00\x01\x02\xff",
+            "Large text: " + "A" * 1000,
         ]
 
         # Simulate data transmission and verification

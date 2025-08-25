@@ -21,6 +21,7 @@ from textual.containers import Horizontal, Vertical
 from textual.widgets import Button, DataTable, Input, Static
 
 from delta_vision.utils.base_screen import BaseTableScreen
+from delta_vision.utils.config import config
 from delta_vision.utils.keyword_highlighter import KeywordHighlighter
 from delta_vision.utils.logger import log
 from delta_vision.utils.screen_navigation import create_navigator
@@ -32,6 +33,7 @@ from delta_vision.utils.search_engine import (
     validate_folders,
 )
 from delta_vision.utils.table_navigation import TableNavigationHandler
+from delta_vision.utils.theme_color_calculator import theme_calculator
 from delta_vision.utils.watchdog import start_observer
 from delta_vision.widgets.footer import Footer
 
@@ -83,7 +85,7 @@ class SearchScreen(BaseTableScreen):
         self._debounce_delay = 0.3  # seconds
 
         # Search engine configuration
-        self._search_config = SearchConfig(max_files=5000, max_preview_chars=200)
+        self._search_config = SearchConfig(max_files=config.max_files, max_preview_chars=config.max_preview_chars)
         self._search_engine = SearchEngine(self._search_config)
 
         # Table navigation handler
@@ -213,6 +215,7 @@ class SearchScreen(BaseTableScreen):
 
     def _start_folder_observers(self):
         """Start file system observers for both NEW and OLD folders."""
+
         def trigger_refresh():
             """Callback for filesystem changes."""
             try:
@@ -407,6 +410,7 @@ class SearchScreen(BaseTableScreen):
                 file_path=match.file_path,
                 line_no=match.line_no,
                 keywords_path=self.keywords_path,
+                keywords_enabled=True,
             )
         except (AttributeError, ValueError, IndexError) as e:
             log(f"Failed to open selected row: {e}")
@@ -625,12 +629,19 @@ class SearchScreen(BaseTableScreen):
             # Start with the base line
             highlighted_line = line
 
-            # Apply keyword highlighting first if enabled
+            # Apply keyword highlighting first if enabled (use same method as viewer screen)
             if self._keywords_enabled and self._keywords_dict:
-                pattern, keyword_lookup = self._keyword_highlighter.get_pattern_and_lookup(self._keywords_dict)
-                if pattern and keyword_lookup:
-                    highlighted_line = self._keyword_highlighter.highlight_line(
-                        line, pattern, keyword_lookup, underline=False
+                # Build color lookup like viewer screen
+                keyword_lookup = {}
+                sorted_keywords = []
+                for _cat, (color, words) in self._keywords_dict.items():
+                    for w in words:
+                        keyword_lookup[w] = color
+                sorted_keywords = sorted(keyword_lookup.keys(), key=len, reverse=True)
+
+                if sorted_keywords:
+                    highlighted_line = self._keyword_highlighter.highlight_with_color_lookup(
+                        line, sorted_keywords, keyword_lookup, case_sensitive=False
                     )
 
             # Convert to Text object for search query highlighting
@@ -639,7 +650,7 @@ class SearchScreen(BaseTableScreen):
             else:
                 preview_text = Text(line)
 
-            # Apply search query highlighting on top of keyword highlighting
+            # Apply search query highlighting - but only if it's not already a keyword
             query = self._input.value if self._input else ""
             if query:
                 if self._regex_enabled:
@@ -647,123 +658,34 @@ class SearchScreen(BaseTableScreen):
                 else:
                     search_pattern = re.compile(re.escape(query), re.IGNORECASE)
 
-                # Find search matches and highlight them with theme-appropriate colors
+                # Find search matches
                 plain_line = line  # Use original line for pattern matching
-                highlight_style = self._get_theme_highlight_style()
                 for match in search_pattern.finditer(plain_line):
                     start, end = match.span()
-                    # Use theme-appropriate style for search matches that will overlay keyword highlighting
+                    matched_text = match.group(0)
+
+                    # Check if this match is already a keyword with defined color
+                    if self._keywords_enabled and self._keywords_dict:
+                        # Build the same keyword lookup we used above
+                        keyword_lookup = {}
+                        for _cat, (color, words) in self._keywords_dict.items():
+                            for w in words:
+                                keyword_lookup[w] = color
+
+                        is_keyword = matched_text.lower() in [k.lower() for k in keyword_lookup.keys()]
+
+                        if is_keyword:
+                            # Don't override keyword colors - they're already correct
+                            continue
+
+                    # Only apply theme-based highlighting to non-keyword matches
+                    highlight_style = theme_calculator.get_highlight_style(self.app)
                     preview_text.stylize(highlight_style, start, end)
 
             return preview_text
         except (AttributeError, ValueError, re.error) as e:
             log(f"Failed to highlight matches in preview: {e}")
             return Text(line)
-
-    def _get_theme_highlight_style(self) -> str:
-        """Get theme-appropriate highlight style with best aesthetic and contrast balance."""
-        try:
-            # Get current theme object
-            current_theme = self.app.get_theme(self.app.theme) if self.app else None
-
-            if current_theme:
-                # Try theme colors in order of preference for highlighting
-                # Avoid harsh warning/error colors, prefer softer accent/secondary colors
-                candidate_colors = [
-                    current_theme.accent,  # Usually a pleasant accent color
-                    current_theme.secondary,  # Secondary theme color
-                    current_theme.primary,  # Primary theme color
-                    current_theme.success,  # Success color (often green)
-                    current_theme.warning,  # Warning color (yellow/orange) - last resort
-                ]
-
-                # Find the first color that provides good contrast and aesthetics
-                for bg_color in candidate_colors:
-                    if bg_color:
-                        # Calculate contrast and pick best text color
-                        fg_color = self._get_readable_text_color(bg_color)
-
-                        # Avoid harsh combinations (white text on very bright colors)
-                        if self._is_good_highlight_combination(bg_color, fg_color):
-                            return f"bold {fg_color} on {bg_color}"
-
-                # If no good combination found, fall back to a softer approach
-                return self._get_fallback_highlight_style(current_theme)
-
-        except (AttributeError, ValueError) as e:
-            log(f"Failed to get theme colors for highlighting: {e}")
-
-        # Ultimate fallback to guaranteed readable style
-        return "bold black on yellow"
-
-    def _get_readable_text_color(self, bg_hex: str) -> str:
-        """Calculate the most readable text color (black or white) for given background."""
-        try:
-            luminance = self._get_luminance(bg_hex)
-
-            # Use white text on dark backgrounds, black text on light backgrounds
-            # Threshold of 0.5 provides good contrast in most cases
-            return "#FFFFFF" if luminance < 0.5 else "#000000"
-
-        except (ValueError, IndexError) as e:
-            log(f"Failed to calculate readable text color for {bg_hex}: {e}")
-            # Fallback to black (safe for most yellow/orange backgrounds)
-            return "#000000"
-
-    def _is_good_highlight_combination(self, bg_color: str, fg_color: str) -> bool:
-        """Check if a background/foreground color combination is aesthetically pleasing."""
-        try:
-            # Get luminance of background color
-            bg_luminance = self._get_luminance(bg_color)
-
-            # Avoid very bright backgrounds with white text (harsh to read)
-            if fg_color == "#FFFFFF" and bg_luminance > 0.7:
-                return False
-
-            # Avoid very dark backgrounds with black text (poor contrast)
-            if fg_color == "#000000" and bg_luminance < 0.3:
-                return False
-
-            # Otherwise it's a good combination
-            return True
-
-        except (ValueError, IndexError):
-            # If we can't determine, assume it's okay
-            return True
-
-    def _get_luminance(self, hex_color: str) -> float:
-        """Calculate the luminance of a hex color (0.0 = black, 1.0 = white)."""
-        try:
-            hex_color = hex_color.lstrip('#')
-            r = int(hex_color[0:2], 16) / 255.0
-            g = int(hex_color[2:4], 16) / 255.0
-            b = int(hex_color[4:6], 16) / 255.0
-
-            # Gamma correction for sRGB
-            def gamma_correct(c):
-                return c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4
-
-            r_linear = gamma_correct(r)
-            g_linear = gamma_correct(g)
-            b_linear = gamma_correct(b)
-
-            return 0.2126 * r_linear + 0.7152 * g_linear + 0.0722 * b_linear
-
-        except (ValueError, IndexError):
-            return 0.5  # Medium luminance fallback
-
-    def _get_fallback_highlight_style(self, theme) -> str:
-        """Get a fallback highlight style when no theme colors work well."""
-        try:
-            # For dark themes, use a subtle light background with dark text
-            if getattr(theme, 'dark', True):  # Default to dark theme behavior
-                return "bold #1F2430 on #CCCAC2"  # Dark text on light background
-            else:
-                # For light themes, use a subtle dark background with light text
-                return "bold #CCCAC2 on #1F2430"  # Light text on dark background
-
-        except (AttributeError, ValueError):
-            return "bold black on yellow"  # Ultimate fallback
 
     def _restore_selection_and_focus(self, matches: list[SearchMatch], prev_key: str | None):
         """Restore previous selection and set focus to results table."""
@@ -822,5 +744,3 @@ class SearchScreen(BaseTableScreen):
         return 0
 
     # --- Actions for help/discoverability ---
-
-

@@ -10,7 +10,7 @@ from textual.containers import Horizontal, Vertical
 from textual.widgets import Button, DataTable, Input, Static
 
 from delta_vision.utils.base_screen import BaseTableScreen
-from delta_vision.utils.config import config
+from delta_vision.utils.config import PathsConfig, config
 from delta_vision.utils.io import read_text
 from delta_vision.utils.keyword_highlighter import highlighter
 from delta_vision.utils.keywords_scanner import KeywordScanner, ScanResult
@@ -40,11 +40,9 @@ class KeywordsScreen(BaseTableScreen):
 
     CSS_PATH = "keywords.tcss"
 
-    def __init__(self, new_folder_path: str | None, old_folder_path: str | None, keywords_path: str | None):
+    def __init__(self, paths_config: PathsConfig):
         super().__init__(page_name="Keywords")
-        self.new_folder_path = new_folder_path
-        self.old_folder_path = old_folder_path
-        self.keywords_path = keywords_path
+        self.paths_config = paths_config
 
         # UI widgets
         self._table = None
@@ -146,19 +144,19 @@ class KeywordsScreen(BaseTableScreen):
                 self.app.call_later(self._maybe_rescan)
 
         try:
-            if self.new_folder_path and os.path.isdir(self.new_folder_path):
+            if self.paths_config.new_folder_path and os.path.isdir(self.paths_config.new_folder_path):
                 # Use a higher debounce to coalesce bursts from large trees
                 self._observer_new, self._stop_new = start_observer(
-                    self.new_folder_path, trigger_refresh, debounce_ms=1000
+                    self.paths_config.new_folder_path, trigger_refresh, debounce_ms=1000
                 )
         except OSError:
             log("Could not start file watcher for NEW folder")
             self._observer_new = None
             self._stop_new = None
         try:
-            if self.old_folder_path and os.path.isdir(self.old_folder_path):
+            if self.paths_config.old_folder_path and os.path.isdir(self.paths_config.old_folder_path):
                 self._observer_old, self._stop_old = start_observer(
-                    self.old_folder_path, trigger_refresh, debounce_ms=1000
+                    self.paths_config.old_folder_path, trigger_refresh, debounce_ms=1000
                 )
         except OSError:
             log("Could not start file watcher for OLD folder")
@@ -251,7 +249,9 @@ class KeywordsScreen(BaseTableScreen):
                 return True
             return False
 
-        return side_changed("NEW", self.new_folder_path) or side_changed("OLD", self.old_folder_path)
+        new_changed = side_changed("NEW", self.paths_config.new_folder_path)
+        old_changed = side_changed("OLD", self.paths_config.old_folder_path)
+        return new_changed or old_changed
 
     def _start_scan(self):
         """Start background scanning."""
@@ -259,7 +259,9 @@ class KeywordsScreen(BaseTableScreen):
             if not self._keywords:
                 return
             self._set_status("Scanning…")
-            self._scanner.start_scan(self._keywords, self.new_folder_path, self.old_folder_path)
+            self._scanner.start_scan(
+                self._keywords, self.paths_config.new_folder_path, self.paths_config.old_folder_path
+            )
         except Exception as e:
             log(f"Error starting scan: {e}")
             self._set_status("Error starting scan")
@@ -420,12 +422,12 @@ class KeywordsScreen(BaseTableScreen):
         self._keywords = []
         self._kw_color_by_word = {}
         self._kw_category_by_word = {}
-        if not self.keywords_path or not os.path.isfile(self.keywords_path):
+        if not self.paths_config.keywords_path or not os.path.isfile(self.paths_config.keywords_path):
             return
         try:
-            parsed = parse_keywords_md(self.keywords_path)
+            parsed = parse_keywords_md(self.paths_config.keywords_path)
         except (OSError, FileNotFoundError, ValueError):
-            log(f"Could not parse keywords file {self.keywords_path}")
+            log(f"Could not parse keywords file {self.paths_config.keywords_path}")
             parsed = {}
         for cat, (color, words) in parsed.items():
             for w in words:
@@ -746,7 +748,7 @@ class KeywordsScreen(BaseTableScreen):
                     self._navigator.open_file_viewer(
                         file_path=file_path,
                         line_no=line_no,
-                        keywords_path=self.keywords_path,
+                        keywords_path=self.paths_config.keywords_path,
                         keywords_enabled=True,
                     )
                     return

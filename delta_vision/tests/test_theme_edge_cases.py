@@ -17,6 +17,7 @@ from delta_vision.themes import discover_themes, register_all_themes
 
 class BaseTestApp(App):
     """Base test app with theme registration support."""
+
     def __init__(self, target_theme: str):
         super().__init__()
         try:
@@ -38,7 +39,7 @@ class TestThemeEdgeCases:
                 all_themes.append(theme.name)
 
         # Test with a representative subset to avoid excessive test time
-        return ['textual-dark', 'textual-light', 'ayu-mirage', 'material'][:len(all_themes)]
+        return ['textual-dark', 'textual-light', 'ayu-mirage', 'material'][: len(all_themes)]
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("theme_name", get_themes_subset(None))
@@ -51,6 +52,7 @@ class TestThemeEdgeCases:
                 f.write("# Empty\n")
 
             try:
+
                 class TestApp(BaseTestApp):
                     def __init__(self):
                         super().__init__(theme_name)
@@ -87,12 +89,14 @@ class TestThemeEdgeCases:
                 f.write("# Test\ntest")
 
             try:
+
                 class TestApp(BaseTestApp):
                     def __init__(self):
                         super().__init__(theme_name)
 
                     async def on_mount(self) -> None:
                         from delta_vision.screens.file_viewer import FileViewerScreen
+
                         self.push_screen(FileViewerScreen(bad_file, keywords_path=kw_path))
 
                 async with TestApp().run_test() as pilot:
@@ -124,6 +128,7 @@ class TestThemeEdgeCases:
 
                 async def on_mount(self) -> None:
                     from delta_vision.screens.file_viewer import FileViewerScreen
+
                     self.push_screen(FileViewerScreen(large_file))
 
             async with TestApp().run_test() as pilot:
@@ -145,6 +150,7 @@ class TestThemeEdgeCases:
 
             async def on_mount(self) -> None:
                 from delta_vision.screens.main_screen import MainScreen
+
                 self.push_screen(MainScreen("/tmp", "/tmp", None))
 
         async with TestApp().run_test() as pilot:
@@ -175,12 +181,14 @@ class TestThemeEdgeCases:
             themes = self.get_themes_subset()
 
             for theme_name in themes[:2]:  # Test subset to avoid excessive time
+
                 class TestApp(BaseTestApp):
                     def __init__(self, theme=theme_name):
                         super().__init__(theme)
 
                     async def on_mount(self) -> None:
                         from delta_vision.screens.file_viewer import FileViewerScreen
+
                         self.push_screen(FileViewerScreen(unicode_file))
 
                 async with TestApp().run_test() as pilot:
@@ -194,6 +202,7 @@ class TestThemeEdgeCases:
     @pytest.mark.asyncio
     async def test_theme_error_recovery(self):
         """Test that app recovers from theme-related errors."""
+
         class TestApp(HomeApp):
             def __init__(self):
                 super().__init__()
@@ -251,6 +260,7 @@ class TestThemeEdgeCases:
                 themes = self.get_themes_subset()
 
                 for theme_name in themes[:2]:  # Test subset
+
                     class TestApp(BaseTestApp):
                         def __init__(self, theme=theme_name):
                             super().__init__(theme)
@@ -322,6 +332,7 @@ class TestThemeEdgeCases:
 
                 async def on_mount(self) -> None:
                     from delta_vision.screens.file_viewer import FileViewerScreen
+
                     self.push_screen(FileViewerScreen(test_file))
 
             async with TestApp().run_test() as pilot:
@@ -362,6 +373,7 @@ class TestThemePerformance:
 
             async def on_mount(self) -> None:
                 from delta_vision.screens.main_screen import MainScreen
+
                 self.push_screen(MainScreen("/tmp", "/tmp", None))
 
         async with TestApp().run_test() as pilot:
@@ -398,6 +410,7 @@ class TestThemePerformance:
 
             async def on_mount(self) -> None:
                 from delta_vision.screens.main_screen import MainScreen
+
                 self.push_screen(MainScreen("/tmp", "/tmp", None))
 
         async with TestApp().run_test() as pilot:

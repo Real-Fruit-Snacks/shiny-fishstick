@@ -14,6 +14,7 @@ from .io import safe_read_lines
 
 class DiffType(Enum):
     """Enumeration of diff row types."""
+
     UNCHANGED = "equal"
     ADDED = "insert"
     DELETED = "delete"
@@ -23,6 +24,7 @@ class DiffType(Enum):
 @dataclass
 class DiffRow:
     """Represents a single row in a diff comparison."""
+
     diff_type: DiffType
     left_line_num: Optional[int]
     right_line_num: Optional[int]
@@ -138,7 +140,7 @@ def _create_equal_row(old_pos: int, new_pos: int, state: dict) -> DiffRow:
         left_line_num=state["old_idx"],
         left_content=state["old_lines"][old_pos],
         right_line_num=state["new_idx"],
-        right_content=state["new_lines"][new_pos]
+        right_content=state["new_lines"][new_pos],
     )
 
 
@@ -150,11 +152,7 @@ def _create_replace_row(i1: int, i2: int, j1: int, j2: int, k: int, state: dict)
     n_ln = state["new_idx"] if j1 + k < j2 else None
 
     return DiffRow(
-        diff_type=DiffType.MODIFIED,
-        left_line_num=o_ln,
-        left_content=o_text,
-        right_line_num=n_ln,
-        right_content=n_text
+        diff_type=DiffType.MODIFIED, left_line_num=o_ln, left_content=o_text, right_line_num=n_ln, right_content=n_text
     )
 
 
@@ -165,7 +163,7 @@ def _create_delete_row(old_pos: int, state: dict) -> DiffRow:
         left_line_num=state["old_idx"],
         left_content=state["old_lines"][old_pos],
         right_line_num=None,
-        right_content=""
+        right_content="",
     )
 
 
@@ -176,7 +174,7 @@ def _create_insert_row(new_pos: int, state: dict) -> DiffRow:
         left_line_num=None,
         left_content="",
         right_line_num=state["new_idx"],
-        right_content=state["new_lines"][new_pos]
+        right_content=state["new_lines"][new_pos],
     )
 
 

@@ -12,6 +12,7 @@ try:
 except ImportError:
     websockets = None
 
+from delta_vision.utils.config import config
 from delta_vision.utils.logger import log
 
 RESIZE_PREFIX = "RESIZE "
@@ -138,7 +139,9 @@ def _create_async_handlers(websocket, terminal_state: dict, signal_state: dict) 
 
             while True:
                 try:
-                    data = await signal_state['loop'].run_in_executor(None, os.read, terminal_state['fd'], 4096)
+                    data = await signal_state['loop'].run_in_executor(
+                        None, os.read, terminal_state['fd'], config.buffer_size
+                    )
                     if not data:
                         break
                     # Handle Ctrl+D as a local disconnect; Ctrl+C is passed through

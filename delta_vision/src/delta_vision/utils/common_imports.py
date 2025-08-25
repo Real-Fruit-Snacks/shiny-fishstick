@@ -44,42 +44,14 @@ __all__ = [
     'Text',
     'log',
     'Footer',
-    'Header'
+    'Header',
 ]
 
 # Import collections for convenience
-COMMON_TEXTUAL_IMPORTS = (
-    ComposeResult,
-    Screen,
-    Horizontal,
-    Vertical,
-    Static
-)
+COMMON_TEXTUAL_IMPORTS = (ComposeResult, Screen, Horizontal, Vertical, Static)
 
-TABLE_SCREEN_IMPORTS = (
-    ComposeResult,
-    Screen,
-    DataTable,
-    Horizontal,
-    Vertical,
-    Static,
-    Button,
-    Input
-)
+TABLE_SCREEN_IMPORTS = (ComposeResult, Screen, DataTable, Horizontal, Vertical, Static, Button, Input)
 
-LAYOUT_IMPORTS = (
-    Center,
-    Horizontal,
-    Vertical
-)
+LAYOUT_IMPORTS = (Center, Horizontal, Vertical)
 
-ALL_WIDGETS = (
-    Button,
-    DataTable,
-    Input,
-    ListItem,
-    ListView,
-    Static,
-    Tab,
-    Tabs
-)
+ALL_WIDGETS = (Button, DataTable, Input, ListItem, ListView, Static, Tab, Tabs)

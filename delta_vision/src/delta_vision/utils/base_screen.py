@@ -20,6 +20,7 @@ from delta_vision.widgets.header import Header
 @dataclass
 class ColumnConfig:
     """Configuration for a single table column."""
+
     title: Union[str, Text]
     key: str
     width: Optional[int] = None
@@ -33,6 +34,7 @@ class TableConfig:
     This dataclass eliminates duplicate table configuration patterns
     found across multiple screens.
     """
+
     zebra_stripes: bool = True
     cursor_type: str = "row"
     show_header: bool = True
@@ -41,18 +43,15 @@ class TableConfig:
     separator_style: str = "dim"
     separator_char: str = "│"
 
-    def add_column(self, title: Union[str, Text], key: str,
-                   width: Optional[int] = None, justify: str = "left") -> None:
+    def add_column(self, title: Union[str, Text], key: str, width: Optional[int] = None, justify: str = "left") -> None:
         """Add a column configuration."""
         self.columns.append(ColumnConfig(title, key, width, justify))
 
     def add_separator(self, key: str) -> None:
         """Add a separator column with standard styling."""
-        self.columns.append(ColumnConfig(
-            Text(self.separator_char, style=self.separator_style, justify="center"),
-            key=key,
-            width=1
-        ))
+        self.columns.append(
+            ColumnConfig(Text(self.separator_char, style=self.separator_style, justify="center"), key=key, width=1)
+        )
 
 
 class BaseNavigationMixin:

@@ -22,6 +22,7 @@ from delta_vision.utils.watchdog import start_observer
 
 class BaseTestApp(App):
     """Base test app for live update tests."""
+
     def __init__(self):
         super().__init__()
         self.theme = 'textual-dark'

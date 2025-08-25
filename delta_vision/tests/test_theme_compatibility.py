@@ -41,6 +41,7 @@ class TestThemeCompatibilityFramework:
 
     class BaseTestApp(App):
         """Base test app with theme registration support."""
+
         def __init__(self, target_theme: str):
             super().__init__()
             try:
@@ -84,7 +85,7 @@ memory
                     "Process started successfully",
                     "Memory allocation complete",
                     "Network interface up",
-                    "Security check passed"
+                    "Security check passed",
                 ]
             fp = os.path.join(folder, name)
             with open(fp, "w", encoding="utf-8") as f:
@@ -108,6 +109,7 @@ memory
     def cleanup_test_data(cls, new_dir, old_dir, kw_path):
         """Clean up test data files."""
         import shutil
+
         try:
             shutil.rmtree(new_dir, ignore_errors=True)
             shutil.rmtree(old_dir, ignore_errors=True)
@@ -288,9 +290,7 @@ class TestFileViewerThemeCompatibility(TestThemeCompatibilityFramework):
                 super().__init__(theme_name)
 
             async def on_mount(self) -> None:
-                self.push_screen(FileViewerScreen(
-                    test_file, line_no=1, keywords_path=kw_path, keywords_enabled=True
-                ))
+                self.push_screen(FileViewerScreen(test_file, line_no=1, keywords_path=kw_path, keywords_enabled=True))
 
         async with TestApp().run_test() as pilot:
             await pilot.pause()
@@ -323,9 +323,7 @@ class TestDiffViewerThemeCompatibility(TestThemeCompatibilityFramework):
                 super().__init__(theme_name)
 
             async def on_mount(self) -> None:
-                self.push_screen(SideBySideDiffScreen(
-                    new_file, old_file, keywords_path=kw_path
-                ))
+                self.push_screen(SideBySideDiffScreen(new_file, old_file, keywords_path=kw_path))
 
         async with TestApp().run_test() as pilot:
             await pilot.pause()
@@ -356,6 +354,7 @@ class TestFullAppThemeCompatibility(TestThemeCompatibilityFramework):
                 self.theme = theme_name
                 # Override config with test data
                 from delta_vision.utils.config import config
+
                 config.new_folder_path = new_dir
                 config.old_folder_path = old_dir
                 config.keywords_path = kw_path
@@ -404,6 +403,7 @@ class TestThemeTransitions:
                 super().__init__()
                 # Override config
                 from delta_vision.utils.config import config
+
                 config.new_folder_path = new_dir
                 config.old_folder_path = old_dir
                 config.keywords_path = kw_path

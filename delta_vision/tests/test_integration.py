@@ -560,7 +560,7 @@ class TestCompleteWorkflows:
             'DELTA_OLD': old_dir,
             'DELTA_KEYWORDS': kw_path,
             'DELTA_CONTEXT_LINES': '5',
-            'DEBUG': '0'
+            'DEBUG': '0',
         }
 
         with patch.dict(os.environ, env_vars):
